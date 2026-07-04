@@ -8,9 +8,9 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     height: 100%;
-    background: #0b0d12;
+    background: radial-gradient(ellipse at center, #12151f 0%, #07080c 100%);
     color: #e8e8ec;
-    font-family: "Courier New", monospace;
+    font-family: Georgia, serif;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -19,53 +19,56 @@
   }
   #game-wrap {
     position: relative;
-    box-shadow: 0 0 40px rgba(0,0,0,0.8), 0 0 0 4px #1c2130, 0 0 0 6px #3a4257;
-    image-rendering: pixelated;
+    border-radius: 6px;
+    box-shadow: 0 10px 60px rgba(0,0,0,0.9), 0 0 0 3px #1c2130, 0 0 0 5px #3a4257, 0 0 0 6px #0a0c12;
   }
-  canvas {
-    display: block;
-    image-rendering: pixelated;
-    background: #1a2b1a;
-  }
+  canvas { display: block; border-radius: 4px; background: #1a2b1a; }
   #hint {
     margin-top: 12px;
     font-size: 13px;
     color: #8a93a6;
     letter-spacing: 1px;
     text-align: center;
+    font-family: "Segoe UI", Arial, sans-serif;
   }
   #hint b { color: #d8b45a; }
 </style>
 </head>
 <body>
   <div id="game-wrap">
-    <canvas id="game" width="640" height="480"></canvas>
+    <canvas id="game" width="800" height="600"></canvas>
   </div>
   <div id="hint">
-    Déplacement : <b>Z Q S D</b> / Flèches &nbsp;·&nbsp; Interagir : <b>E</b> / Entrée &nbsp;·&nbsp; En combat : <b>1 2 3</b>
+    Déplacement : <b>Z Q S D</b> / Flèches · Interagir : <b>E</b> · Combat : <b>1-4</b> · Boutique : <b>↑↓ E</b>, <b>X</b> sortir
   </div>
 <script>
 "use strict";
 /* ============================================================================
-   SHADOW OF THE WARRIOR
-   Un jeu d'aventure/combat au tour par tour, entièrement dessiné au code.
-   - Le héros se promène sur une carte.
-   - Il peut entrer dans la PORTE DU DONJON pour combattre.
-   - Il peut acheter des POTIONS chez la marchande (l'apothicaire).
-   - Il peut acheter ARMES & ARMURES chez le forgeron, en bas de la carte.
-   - Effets spéciaux des stats :
-        * VITESSE  -> augmente l'ESQUIVE (chance d'éviter les coups)
-        * FORCE    -> augmente l'ARMURE (réduction des dégâts subis)
+   SHADOW OF THE WARRIOR — v2
+   Rendu avancé (dégradés, lumières, particules), carte ouverte, donjon,
+   marchands, et système de 3 classes évoluant en 9 voies au niveau 5.
+   Effets des stats : FORCE -> armure & dégâts · VITESSE -> esquive & double
+   frappe & fuite · ESPRIT -> puissance magique & énergie.
    ========================================================================== */
-
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
 const W = canvas.width, H = canvas.height;
-ctx.imageSmoothingEnabled = false;
 
-/* ---------------------------------------------------------------------------
-   ENTRÉES CLAVIER
---------------------------------------------------------------------------- */
+if (!ctx.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    if (typeof r === "number") r = {tl:r, tr:r, br:r, bl:r};
+    else r = {tl:r[0]||0, tr:r[1]||0, br:r[2]||0, bl:r[3]||0};
+    this.moveTo(x + r.tl, y);
+    this.arcTo(x + w, y, x + w, y + h, r.tr);
+    this.arcTo(x + w, y + h, x, y + h, r.br);
+    this.arcTo(x, y + h, x, y, r.bl);
+    this.arcTo(x, y, x + w, y, r.tl);
+    this.closePath();
+    return this;
+  };
+}
+
+/* -------------------------------- ENTRÉES -------------------------------- */
 const keys = {};
 const justPressed = {};
 window.addEventListener("keydown", (e) => {
@@ -75,800 +78,1556 @@ window.addEventListener("keydown", (e) => {
   if (["arrowup","arrowdown","arrowleft","arrowright"," "].includes(k)) e.preventDefault();
 });
 window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
-function pressed(...names){ return names.some(n => justPressed[n]); }
-function held(...names){ return names.some(n => keys[n]); }
+function pressed(){ for (let i=0;i<arguments.length;i++) if (justPressed[arguments[i]]) return true; return false; }
+function held(){ for (let i=0;i<arguments.length;i++) if (keys[arguments[i]]) return true; return false; }
 function clearJustPressed(){ for (const k in justPressed) delete justPressed[k]; }
 
-/* ---------------------------------------------------------------------------
-   ÉTAT DU JOUEUR
---------------------------------------------------------------------------- */
-const player = {
-  x: 320, y: 300, w: 20, h: 26,
-  dir: "down", moving: false, animTime: 0,
-  // Progression
-  niveau: 1, xp: 0, xpMax: 20,
-  or: 60,
-  // Stats de base
-  pvMax: 40, pv: 40,
-  force: 5,       // -> armure
-  vitesse: 4,     // -> esquive
-  degatsBase: 4,  // dégâts d'attaque de base (poings/petite lame)
-  // Équipement
-  arme: { nom: "Lame rouillée", degats: 3 },
-  armure: { nom: "Tunique", defense: 1 },
-  // Inventaire
-  potions: 1,
+/* --------------------------- HELPERS DE DESSIN ---------------------------- */
+function linGrad(x0,y0,x1,y1,stops){
+  const g = ctx.createLinearGradient(x0,y0,x1,y1);
+  for (const s of stops) g.addColorStop(s[0], s[1]);
+  return g;
+}
+function rrFill(x,y,w,h,r,fill){
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,r);
+  ctx.fillStyle = fill; ctx.fill();
+}
+function rrStroke(x,y,w,h,r,stroke,lw){
+  ctx.beginPath(); ctx.roundRect(x,y,w,h,r);
+  ctx.strokeStyle = stroke; ctx.lineWidth = lw||1; ctx.stroke();
+}
+function txt(t,x,y,size,color,align,font,noShadow){
+  ctx.textAlign = align||"left";
+  const f = font || "Georgia, serif";
+  ctx.font = (f.indexOf("px") !== -1) ? f : size + "px " + f;
+  if (!noShadow){ ctx.fillStyle = "rgba(0,0,0,0.75)"; ctx.fillText(t, x+1.2, y+1.2); }
+  ctx.fillStyle = color; ctx.fillText(t, x, y);
+}
+function wrapTxt(t,x,y,maxW,lh,size,color,align){
+  ctx.font = size + "px Georgia, serif";
+  const words = t.split(" ");
+  let line = "", cy = y;
+  for (const w of words){
+    const test = line ? line + " " + w : w;
+    if (ctx.measureText(test).width > maxW && line){
+      txt(line, x, cy, size, color, align); line = w; cy += lh;
+    } else line = test;
+  }
+  if (line) txt(line, x, cy, size, color, align);
+  return cy;
+}
+function barre(x,y,w,h,ratio,c1,c2){
+  ratio = Math.max(0, Math.min(1, ratio));
+  rrFill(x,y,w,h,h/2, "rgba(0,0,0,0.6)");
+  if (ratio > 0.01){
+    rrFill(x+1.5,y+1.5,Math.max(2,(w-3)*ratio),h-3,(h-3)/2, linGrad(x,y,x,y+h,[[0,c1],[1,c2]]));
+    rrFill(x+3,y+2.5,Math.max(1,(w-6)*ratio),Math.max(1,h*0.22),1,"rgba(255,255,255,0.28)");
+  }
+  rrStroke(x,y,w,h,h/2,"rgba(0,0,0,0.85)",1);
+}
+function panel(x,y,w,h){
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.65)"; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+  rrFill(x,y,w,h,10, linGrad(x,y,x,y+h,[[0,"rgba(26,29,41,0.97)"],[1,"rgba(11,13,19,0.97)"]]));
+  ctx.restore();
+  rrStroke(x+1.5,y+1.5,w-3,h-3,9,"rgba(216,180,90,0.6)",1.5);
+  rrStroke(x+5,y+5,w-10,h-10,6,"rgba(216,180,90,0.18)",1);
+}
+function shade(hex,f){
+  const r = Math.round(parseInt(hex.slice(1,3),16)*f);
+  const g = Math.round(parseInt(hex.slice(3,5),16)*f);
+  const b = Math.round(parseInt(hex.slice(5,7),16)*f);
+  return "rgb(" + Math.min(255,r) + "," + Math.min(255,g) + "," + Math.min(255,b) + ")";
+}
+
+/* ------------------------ PARTICULES & TEXTES FLOTTANTS ------------------- */
+let parts = [];
+function spawnParts(x,y,color,n,spd,life,grav){
+  for (let i=0;i<n;i++){
+    const a = Math.random()*Math.PI*2, v = (0.4+Math.random()*0.8)*spd;
+    parts.push({x:x,y:y,vx:Math.cos(a)*v,vy:Math.sin(a)*v,life:life*(0.6+Math.random()*0.6),
+      max:life,color:color,size:1.5+Math.random()*2.5,grav:grav||0});
+  }
+}
+function drawParts(){
+  for (let i=parts.length-1;i>=0;i--){
+    const p = parts[i];
+    p.x += p.vx; p.y += p.vy; p.vy += p.grav; p.life--;
+    if (p.life <= 0){ parts.splice(i,1); continue; }
+    ctx.globalAlpha = Math.max(0, p.life/p.max);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x-p.size/2, p.y-p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+}
+let floats = [];
+function addFloat(x,y,t,color,size){
+  floats.push({x:x+(Math.random()*16-8), y:y, t:t, color:color, size:size||14, life:55, max:55});
+}
+function drawFloats(){
+  for (let i=floats.length-1;i>=0;i--){
+    const f = floats[i];
+    f.y -= 0.75; f.life--;
+    if (f.life <= 0){ floats.splice(i,1); continue; }
+    ctx.globalAlpha = Math.min(1, f.life/25);
+    txt(f.t, f.x, f.y, f.size, f.color, "center", "bold " + f.size + "px Georgia");
+  }
+  ctx.globalAlpha = 1;
+}
+let shake = 0;
+
+/* -------------------------- VIGNETTE PRÉ-CALCULÉE ------------------------- */
+const vinCv = document.createElement("canvas"); vinCv.width = W; vinCv.height = H;
+(function(){
+  const g = vinCv.getContext("2d");
+  const rg = g.createRadialGradient(W/2, H/2, H*0.42, W/2, H/2, H*0.78);
+  rg.addColorStop(0, "rgba(0,0,0,0)");
+  rg.addColorStop(1, "rgba(0,0,0,0.42)");
+  g.fillStyle = rg; g.fillRect(0,0,W,H);
+})();
+
+/* ============================== ÉTATS DU JEU ============================== */
+const S = { SELECT:0, MAP:1, COMBAT:2, SHOP:3, MSG:4, EVOLVE:6, GAMEOVER:7 };
+let state = S.SELECT;
+let time = 0;
+
+/* ============================ CLASSES & ÉVOLUTIONS ========================= */
+const CLASSES = [
+  { id:"guerrier", nom:"Guerrier", titre:"Le Rempart", couleur:"#c7503a",
+    stats:{ pv:60, force:9, vitesse:3, esprit:2 },
+    arme:{ nom:"Épée usée", degats:3 },
+    capacite:{ id:"titan", nom:"Colère du Titan", cout:30,
+      desc:"Frappe imparable infligeant 220% des dégâts." },
+    desc:"Un colosse en armure lourde. Sa Force écrase autant qu'elle protège." },
+  { id:"ombre", nom:"Lame des Ombres", titre:"L'Insaisissable", couleur:"#7a6ae8",
+    stats:{ pv:45, force:5, vitesse:9, esprit:3 },
+    arme:{ nom:"Katana terni", degats:3 },
+    capacite:{ id:"danse", nom:"Danse des Ombres", cout:30,
+      desc:"3 frappes éclair à 80% des dégâts chacune." },
+    desc:"Un assassin fulgurant. Sa Vitesse le rend presque impossible à toucher." },
+  { id:"mage", nom:"Mage de Guerre", titre:"L'Éveillé", couleur:"#b85ae8",
+    stats:{ pv:40, force:3, vitesse:4, esprit:10 },
+    arme:{ nom:"Bâton noueux", degats:3 },
+    capacite:{ id:"feu", nom:"Boule de Feu", cout:25,
+      desc:"Dégâts magiques imparables, croît avec l'Esprit." },
+    desc:"Il canalise l'Esprit pour déchaîner une magie dévastatrice." },
+];
+const EVOLUTIONS = {
+  guerrier: [
+    { id:"berserker", nom:"Berserker", couleur:"#ff5a2f",
+      bonus:{ pv:15, force:5, vitesse:2, esprit:0 },
+      capacite:{ id:"rage", nom:"Rage Sanglante", cout:40,
+        desc:"320% de dégâts imparables, mais vous coûte 8% de vos PV." },
+      desc:"La fureur faite chair. Frappe sans retenue, saigne sans y penser." },
+    { id:"paladin", nom:"Paladin", couleur:"#e8c05a",
+      bonus:{ pv:30, force:3, vitesse:0, esprit:3 },
+      capacite:{ id:"jugement", nom:"Jugement Sacré", cout:40,
+        desc:"180% de dégâts et vous soigne de 25% de vos PV max." },
+      desc:"Un bastion sacré. Chaque coup porté répare une blessure." },
+    { id:"seigneur", nom:"Seigneur de Guerre", couleur:"#c8843a",
+      bonus:{ pv:20, force:3, vitesse:3, esprit:1 },
+      capacite:{ id:"etendard", nom:"Étendard de Guerre", cout:35,
+        desc:"+5 Force, +6 armure, +10% esquive pendant 4 tours." },
+      desc:"Un stratège né. Son étendard transforme la mêlée en triomphe." },
+  ],
+  ombre: [
+    { id:"maitre", nom:"Maître des Ombres", couleur:"#9a7aff",
+      bonus:{ pv:10, force:1, vitesse:5, esprit:2 },
+      capacite:{ id:"voile", nom:"Voile d'Ombre", cout:35,
+        desc:"Esquive garantie 2 tours, prochaine attaque critique ×2.5." },
+      desc:"Il n'est plus un homme : il est l'obscurité entre deux torches." },
+    { id:"duelliste", nom:"Duelliste", couleur:"#4ab8d8",
+      bonus:{ pv:15, force:3, vitesse:3, esprit:1 },
+      capacite:{ id:"estocade", nom:"Estocade Fulgurante", cout:40,
+        desc:"4 frappes à 70% des dégâts chacune." },
+      desc:"Une lame élégante et cruelle. Le duel est son théâtre." },
+    { id:"traqueur", nom:"Traqueur", couleur:"#5ad86a",
+      bonus:{ pv:12, force:2, vitesse:4, esprit:2 },
+      capacite:{ id:"venin", nom:"Lame Empoisonnée", cout:35,
+        desc:"130% de dégâts + poison 3 tours (selon Esprit)." },
+      desc:"Sa proie est déjà morte. Elle ne le sait simplement pas encore." },
+  ],
+  mage: [
+    { id:"archimage", nom:"Archimage", couleur:"#d85af0",
+      bonus:{ pv:10, force:0, vitesse:1, esprit:6 },
+      capacite:{ id:"meteore", nom:"Météore", cout:45,
+        desc:"Dégâts magiques massifs et imparables (selon Esprit)." },
+      desc:"Le ciel lui obéit. Les montagnes feraient bien d'en faire autant." },
+    { id:"necro", nom:"Nécromancien", couleur:"#5ae89a",
+      bonus:{ pv:15, force:1, vitesse:1, esprit:4 },
+      capacite:{ id:"drain", nom:"Drain de Vie", cout:40,
+        desc:"Dégâts magiques qui vous soignent d'autant." },
+      desc:"La frontière entre vie et mort n'est pour lui qu'une suggestion." },
+    { id:"sage", nom:"Sage", couleur:"#5ab8e8",
+      bonus:{ pv:25, force:1, vitesse:1, esprit:4 },
+      capacite:{ id:"benediction", nom:"Bénédiction", cout:35,
+        desc:"Gros soin (selon Esprit) + 6 armure pendant 3 tours." },
+      desc:"Une sérénité de fer. Il survit à tout, et vous avec lui." },
+  ],
 };
 
-// Effets spéciaux dérivés des stats
-function armureTotale(){
-  // La FORCE renforce l'armure : chaque point de force ajoute 0.6 d'armure.
-  return player.armure.defense + Math.floor(player.force * 0.6);
-}
-function esquivePct(){
-  // La VITESSE augmente l'esquive, plafonnée à 60%.
-  return Math.min(60, Math.round(player.vitesse * 2.2));
-}
-function degatsAttaque(){
-  return player.degatsBase + player.arme.degats + Math.floor(player.force * 0.4);
+/* ================================= JOUEUR ================================= */
+const player = {
+  x:400, y:440, w:20, h:26, dir:"down", moving:false, animTime:0,
+  classe:null, evolution:null,
+  niveau:1, xp:0, xpMax:20, or:60,
+  pvMax:40, pv:40, force:5, vitesse:5, esprit:5, degatsBase:4, energie:50,
+  arme:{ nom:"Poings", degats:0 },
+  armure:{ nom:"Tunique", defense:1 },
+  potions:1,
+};
+function newGame(cls){
+  player.classe = cls; player.evolution = null;
+  player.niveau = 1; player.xp = 0; player.xpMax = 20; player.or = 60;
+  player.pvMax = cls.stats.pv; player.pv = cls.stats.pv;
+  player.force = cls.stats.force; player.vitesse = cls.stats.vitesse;
+  player.esprit = cls.stats.esprit; player.degatsBase = 4;
+  player.arme = { nom:cls.arme.nom, degats:cls.arme.degats };
+  player.armure = { nom:"Tunique", defense:1 };
+  player.potions = 1; player.energie = energieMax();
+  player.x = 400; player.y = 440; player.dir = "down";
 }
 
-/* ---------------------------------------------------------------------------
-   BOUTIQUES
---------------------------------------------------------------------------- */
+/* --------------------- STATS DÉRIVÉES (EFFETS SPÉCIAUX) ------------------- */
+let combat = null;
+function buffVal(k){
+  return (combat && combat.buff) ? (combat.buff[k]||0) : 0;
+}
+function armureTotale(){ return player.armure.defense + Math.floor(player.force*0.6) + buffVal("armure"); }
+function esquivePct(){ return Math.min(70, Math.round(player.vitesse*2.2) + buffVal("esquive")); }
+function degatsAttaque(){ return player.degatsBase + player.arme.degats + Math.floor((player.force+buffVal("force"))*0.5); }
+function doubleChance(){ return Math.min(25, Math.round(player.vitesse*1.2)); }
+function energieMax(){ return 50 + player.esprit*5; }
+function capaciteActuelle(){ return player.evolution ? player.evolution.capacite : player.classe.capacite; }
+function nomClasse(){ return player.evolution ? player.evolution.nom : (player.classe ? player.classe.nom : "?"); }
+function couleurClasse(){ return player.evolution ? player.evolution.couleur : (player.classe ? player.classe.couleur : "#888"); }
+
+const combatLog = [];
+function log(m){ combatLog.push(m); if (combatLog.length > 5) combatLog.shift(); }
+
+/* ================================ BOUTIQUES =============================== */
 const potionShop = {
-  titre: "APOTHICAIRE",
-  items: [
-    { nom: "Potion de soin", desc: "Rend 25 PV", prix: 15, type: "potion" },
-    { nom: "Élixir de Force", desc: "+1 Force (permanent)", prix: 40, type: "force" },
-    { nom: "Huile de Célérité", desc: "+1 Vitesse (permanent)", prix: 40, type: "vitesse" },
-    { nom: "Tonique vital", desc: "+8 PV Max (permanent)", prix: 35, type: "pvmax" },
+  titre:"APOTHICAIRE", vendeur:"apoth",
+  accueil:"« Entre, voyageur. Mes fioles raccommodent les vivants. »",
+  items:[
+    { nom:"Potion de soin",    desc:"Rend 30 PV (utilisable en combat)", prix:15, type:"potion" },
+    { nom:"Élixir de Force",   desc:"+1 Force permanent (armure & dégâts)", prix:40, type:"force" },
+    { nom:"Huile de Célérité", desc:"+1 Vitesse permanent (esquive & double frappe)", prix:40, type:"vitesse" },
+    { nom:"Cristal d'Esprit",  desc:"+1 Esprit permanent (magie & énergie)", prix:40, type:"esprit" },
+    { nom:"Tonique vital",     desc:"+10 PV Max permanent", prix:35, type:"pvmax" },
   ],
 };
 const smithShop = {
-  titre: "FORGERON",
-  items: [
-    { nom: "Katana d'acier",   desc: "Arme · +8 dégâts",   prix: 55, type: "arme",   degats: 8 },
-    { nom: "Lame d'obsidienne",desc: "Arme · +14 dégâts",  prix: 120, type: "arme",  degats: 14 },
-    { nom: "Cotte de mailles", desc: "Armure · +5 défense",prix: 50, type: "armure", defense: 5 },
-    { nom: "Armure d'ombre",   desc: "Armure · +10 défense",prix: 110, type: "armure", defense: 10 },
+  titre:"FORGERON", vendeur:"forge",
+  accueil:"« De l'acier honnête, trempé dans le feu. Choisis, guerrier. »",
+  items:[
+    { nom:"Katana d'acier",     desc:"Arme · +8 dégâts",    prix:55,  type:"arme",   degats:8 },
+    { nom:"Lame d'obsidienne",  desc:"Arme · +14 dégâts",   prix:120, type:"arme",   degats:14 },
+    { nom:"Espadon du dragon",  desc:"Arme · +20 dégâts",   prix:220, type:"arme",   degats:20 },
+    { nom:"Cotte de mailles",   desc:"Armure · +5 défense", prix:50,  type:"armure", defense:5 },
+    { nom:"Armure d'ombre",     desc:"Armure · +10 défense",prix:110, type:"armure", defense:10 },
+    { nom:"Harnois du titan",   desc:"Armure · +16 défense",prix:230, type:"armure", defense:16 },
   ],
 };
-
-/* ---------------------------------------------------------------------------
-   CARTE — obstacles et zones d'interaction
-   Chaque bâtiment a une "porte" ; quand le héros s'y tient et appuie sur E,
-   l'action associée se déclenche.
---------------------------------------------------------------------------- */
-const walls = [
-  // bords de la carte
-  {x:0, y:0, w:W, h:24},
-  {x:0, y:H-24, w:W, h:24},
-  {x:0, y:0, w:24, h:H},
-  {x:W-24, y:0, w:24, h:H},
-];
-
-// Bâtiments : rect = emprise (collision), porte = zone d'action
-const buildings = [
-  {
-    id: "donjon",
-    rect: {x:250, y:40, w:140, h:90},
-    porte: {x:305, y:118, w:30, h:20},
-    couleur: "#3a2233", toit: "#5a2d3d",
-    label: "DONJON",
-  },
-  {
-    id: "apothicaire",
-    rect: {x:470, y:170, w:120, h:80},
-    porte: {x:518, y:238, w:26, h:18},
-    couleur: "#2a3a2a", toit: "#3f6b3f",
-    label: "APOTHICAIRE",
-  },
-  {
-    id: "forgeron",
-    rect: {x:120, y:360, w:130, h:80},
-    porte: {x:172, y:428, w:26, h:18},
-    couleur: "#3a3226", toit: "#6b5a2d",
-    label: "FORGERON",
-  },
-];
-
-function rectsOverlap(a, b){
-  return a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
-}
-function playerBox(nx, ny){
-  return { x:(nx ?? player.x) - player.w/2, y:(ny ?? player.y) - player.h/2, w:player.w, h:player.h };
-}
-function collides(nx, ny){
-  const box = playerBox(nx, ny);
-  for (const w of walls) if (rectsOverlap(box, w)) return true;
-  for (const b of buildings) if (rectsOverlap(box, b.rect)) return true;
-  return false;
-}
-function nearDoor(){
-  const box = playerBox();
-  const zone = { x: box.x-8, y: box.y-8, w: box.w+16, h: box.h+16 };
-  for (const b of buildings) if (rectsOverlap(zone, b.porte)) return b;
-  return null;
-}
-
-/* ---------------------------------------------------------------------------
-   ENNEMIS
---------------------------------------------------------------------------- */
-const bestiaire = [
-  { nom:"Gobelin d'ombre", pvMax:22, degats:6, esquive:8,  or:[10,20], xp:8,  couleur:"#5a7a3a" },
-  { nom:"Bandit masqué",   pvMax:34, degats:9, esquive:14, or:[18,30], xp:14, couleur:"#7a5a3a" },
-  { nom:"Spectre errant",  pvMax:28, degats:8, esquive:26, or:[15,28], xp:12, couleur:"#6a7a9a" },
-  { nom:"Ronin déchu",     pvMax:52, degats:13,esquive:18, or:[35,55], xp:26, couleur:"#9a3a3a" },
-];
-function creerEnnemi(){
-  // Difficulté croît avec le niveau du héros
-  const pool = bestiaire.slice(0, Math.min(bestiaire.length, 1 + Math.floor(player.niveau/1.5)));
-  const t = pool[Math.floor(Math.random()*pool.length)];
-  const boost = 1 + (player.niveau-1)*0.12;
-  return {
-    nom: t.nom,
-    pvMax: Math.round(t.pvMax*boost), pv: Math.round(t.pvMax*boost),
-    degats: Math.round(t.degats*boost),
-    esquive: t.esquive,
-    or: Math.round(t.or[0] + Math.random()*(t.or[1]-t.or[0])),
-    xp: Math.round(t.xp*boost),
-    couleur: t.couleur,
-    hitFlash: 0,
-  };
-}
-
-/* ---------------------------------------------------------------------------
-   MACHINE À ÉTATS
---------------------------------------------------------------------------- */
-const STATE = { MAP:"map", COMBAT:"combat", SHOP:"shop", MSG:"msg", GAMEOVER:"gameover" };
-let state = STATE.MAP;
-
-// Combat
-let combat = null;         // { ennemi, tour, sub, ... }
-const combatLog = [];
-function log(msg){ combatLog.push(msg); if (combatLog.length>4) combatLog.shift(); }
-
-// Boutique
-let shop = null;           // { data, cursor }
-
-// Message overlay
-let msg = { lignes: [], suite: null };
-function showMessage(lignes, suite){
-  msg.lignes = Array.isArray(lignes) ? lignes : [lignes];
-  msg.suite = suite || (()=>{ state = STATE.MAP; });
-  state = STATE.MSG;
-}
-
-/* ---------------------------------------------------------------------------
-   LOGIQUE : CARTE
---------------------------------------------------------------------------- */
-function updateMap(dt){
-  let dx = 0, dy = 0;
-  const spd = 2.2;
-  if (held("arrowleft","q","a")) { dx -= 1; player.dir = "left"; }
-  if (held("arrowright","d"))    { dx += 1; player.dir = "right"; }
-  if (held("arrowup","z","w"))   { dy -= 1; player.dir = "up"; }
-  if (held("arrowdown","s"))     { dy += 1; player.dir = "down"; }
-
-  player.moving = (dx!==0 || dy!==0);
-  if (player.moving){
-    const len = Math.hypot(dx,dy) || 1;
-    const mx = (dx/len)*spd, my = (dy/len)*spd;
-    if (!collides(player.x+mx, player.y)) player.x += mx;
-    if (!collides(player.x, player.y+my)) player.y += my;
-    player.animTime += dt;
-  } else {
-    player.animTime = 0;
-  }
-
-  const b = nearDoor();
-  if (b && pressed("e","enter"," ")){
-    if (b.id === "donjon") entrerDonjon();
-    else if (b.id === "apothicaire") ouvrirBoutique(potionShop);
-    else if (b.id === "forgeron") ouvrirBoutique(smithShop);
-  }
-}
-
-function entrerDonjon(){
-  combat = {
-    ennemi: creerEnnemi(),
-    tour: "joueur",
-    cursor: 0,
-    anim: 0,
-    playerFlash: 0,
-    fini: false,
-  };
-  combatLog.length = 0;
-  log("Un " + combat.ennemi.nom + " surgit de l'ombre !");
-  state = STATE.COMBAT;
-}
-
-function ouvrirBoutique(data){
-  shop = { data, cursor: 0 };
-  state = STATE.SHOP;
-}
-
-/* ---------------------------------------------------------------------------
-   LOGIQUE : COMBAT (tour par tour)
---------------------------------------------------------------------------- */
-function attaqueJoueur(){
-  const e = combat.ennemi;
-  // L'ennemi peut esquiver selon son esquive propre
-  if (Math.random()*100 < e.esquive){
-    log("Le " + e.nom + " esquive votre attaque !");
-  } else {
-    let dgt = degatsAttaque();
-    dgt += Math.floor(Math.random()*3); // petite variance
-    e.pv = Math.max(0, e.pv - dgt);
-    e.hitFlash = 12;
-    log("Vous infligez " + dgt + " dégâts.");
-  }
-  finirTourJoueur();
-}
-
-function boirePotionCombat(){
-  if (player.potions <= 0){ log("Vous n'avez plus de potion !"); return; }
-  player.potions--;
-  const soin = 25;
-  player.pv = Math.min(player.pvMax, player.pv + soin);
-  log("Vous buvez une potion (+" + soin + " PV).");
-  finirTourJoueur();
-}
-
-function tenterFuite(){
-  // La VITESSE aide à fuir
-  const chance = 30 + player.vitesse*4;
-  if (Math.random()*100 < chance){
-    log("Vous fuyez le combat...");
-    combat.fini = true;
-    setTimeout(()=>{ state = STATE.MAP; }, 700);
-  } else {
-    log("Fuite ratée !");
-    finirTourJoueur();
-  }
-}
-
-function finirTourJoueur(){
-  const e = combat.ennemi;
-  if (e.pv <= 0){ victoire(); return; }
-  combat.tour = "ennemi";
-  combat.anim = 40; // délai avant riposte
-}
-
-function tourEnnemi(){
-  const e = combat.ennemi;
-  // Le héros esquive selon sa VITESSE
-  if (Math.random()*100 < esquivePct()){
-    log("Vous esquivez l'attaque du " + e.nom + " !");
-  } else {
-    // La FORCE (armure) réduit les dégâts
-    let dgt = e.degats + Math.floor(Math.random()*3) - armureTotale();
-    dgt = Math.max(1, dgt);
-    player.pv = Math.max(0, player.pv - dgt);
-    combat.playerFlash = 12;
-    log("Le " + e.nom + " vous inflige " + dgt + " dégâts.");
-  }
-  if (player.pv <= 0){ defaite(); return; }
-  combat.tour = "joueur";
-}
-
-function victoire(){
-  const e = combat.ennemi;
-  combat.fini = true;
-  player.or += e.or;
-  player.xp += e.xp;
-  let msgs = ["Victoire !", "Le " + e.nom + " est vaincu.", "Butin : " + e.or + " or, " + e.xp + " XP."];
-  // Montées de niveau
-  while (player.xp >= player.xpMax){
-    player.xp -= player.xpMax;
-    player.niveau++;
-    player.xpMax = Math.round(player.xpMax * 1.5);
-    player.pvMax += 8; player.pv = player.pvMax;
-    player.force += 1; player.vitesse += 1;
-    msgs.push("★ NIVEAU " + player.niveau + " ! Force +1, Vitesse +1, PV Max +8.");
-  }
-  setTimeout(()=>showMessage(msgs), 500);
-}
-
-function defaite(){
-  combat.fini = true;
-  setTimeout(()=>{ state = STATE.GAMEOVER; }, 400);
-}
-
-function updateCombat(dt){
-  if (combat.ennemi.hitFlash > 0) combat.ennemi.hitFlash--;
-  if (combat.playerFlash > 0) combat.playerFlash--;
-  if (combat.fini) return;
-
-  if (combat.tour === "ennemi"){
-    if (combat.anim > 0){ combat.anim--; }
-    else { tourEnnemi(); }
-    return;
-  }
-
-  // Tour du joueur : menu
-  const options = ["Attaquer", "Potion (" + player.potions + ")", "Fuir"];
-  if (pressed("arrowup","z","w")) combat.cursor = (combat.cursor+options.length-1)%options.length;
-  if (pressed("arrowdown","s"))   combat.cursor = (combat.cursor+1)%options.length;
-  if (pressed("1")) combat.cursor = 0;
-  if (pressed("2")) combat.cursor = 1;
-  if (pressed("3")) combat.cursor = 2;
-  if (pressed("e","enter"," ")){
-    if (combat.cursor === 0) attaqueJoueur();
-    else if (combat.cursor === 1) boirePotionCombat();
-    else if (combat.cursor === 2) tenterFuite();
-  }
-}
-
-/* ---------------------------------------------------------------------------
-   LOGIQUE : BOUTIQUE
---------------------------------------------------------------------------- */
-function updateShop(dt){
-  const items = shop.data.items;
-  if (pressed("arrowup","z","w")) shop.cursor = (shop.cursor+items.length-1)%items.length;
-  if (pressed("arrowdown","s"))   shop.cursor = (shop.cursor+1)%items.length;
-  if (pressed("e","enter"," ","1","2","3","4")){
-    if (pressed("1")) shop.cursor = 0;
-    if (pressed("2")) shop.cursor = 1;
-    if (pressed("3")) shop.cursor = 2;
-    if (pressed("4")) shop.cursor = 3;
-    acheter(items[shop.cursor]);
-  }
-  if (pressed("escape","x")) state = STATE.MAP;
-}
-
+let shop = null, flashShop = "", flashTimer = 0;
 function acheter(item){
-  if (player.or < item.prix){
-    flashShop = "Pas assez d'or !";
-    flashTimer = 90;
-    return;
-  }
+  if (player.or < item.prix){ flashShop = "Pas assez d'or !"; flashTimer = 90; return; }
   player.or -= item.prix;
   switch(item.type){
     case "potion":  player.potions++; break;
     case "force":   player.force++; break;
     case "vitesse": player.vitesse++; break;
-    case "pvmax":   player.pvMax += 8; player.pv += 8; break;
+    case "esprit":  player.esprit++; break;
+    case "pvmax":   player.pvMax += 10; player.pv += 10; break;
     case "arme":    player.arme = { nom:item.nom, degats:item.degats }; break;
     case "armure":  player.armure = { nom:item.nom, defense:item.defense }; break;
   }
-  flashShop = "Acheté : " + item.nom + " !";
-  flashTimer = 90;
-}
-let flashShop = "", flashTimer = 0;
-
-/* ---------------------------------------------------------------------------
-   DESSIN : utilitaires pixel-art
---------------------------------------------------------------------------- */
-function px(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); }
-
-// Sprite du héros — ninja/guerrier de l'ombre, dessiné bloc par bloc
-function drawHero(cx, cy, dir, moving, t, scale){
-  scale = scale || 1;
-  const s = scale;
-  const legPhase = moving ? Math.floor(t/8)%2 : 0;
-  // ombre
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.beginPath();
-  ctx.ellipse(cx, cy+14*s, 11*s, 4*s, 0, 0, Math.PI*2);
-  ctx.fill();
-
-  const bx = cx - 8*s, by = cy - 14*s;
-  const dark = "#1c2028", mid = "#2b3140", red = "#b8324a", skin = "#d9b48f", band="#e0c76a";
-  // jambes
-  const legY = by + 20*s;
-  if (legPhase===0){
-    px(bx+3*s, legY, 4*s, 6*s, dark);
-    px(bx+9*s, legY, 4*s, 6*s, dark);
-  } else {
-    px(bx+2*s, legY, 4*s, 6*s, dark);
-    px(bx+10*s, legY, 4*s, 6*s, dark);
-  }
-  // corps
-  px(bx+3*s, by+10*s, 10*s, 11*s, mid);
-  // ceinture rouge
-  px(bx+3*s, by+16*s, 10*s, 2*s, red);
-  // écharpe / bandeau derrière
-  px(bx+1*s, by+11*s, 2*s, 8*s, red);
-  // tête
-  px(bx+4*s, by+2*s, 8*s, 8*s, dark);
-  // bandeau
-  px(bx+4*s, by+5*s, 8*s, 2*s, band);
-  // visage selon direction
-  if (dir==="down"){
-    px(bx+5*s, by+7*s, 6*s, 3*s, skin);
-    px(bx+6*s, by+8*s, 1*s, 1*s, "#111"); // yeux
-    px(bx+9*s, by+8*s, 1*s, 1*s, "#111");
-  } else if (dir==="up"){
-    px(bx+4*s, by+2*s, 8*s, 6*s, dark);
-  } else if (dir==="left"){
-    px(bx+4*s, by+7*s, 4*s, 3*s, skin);
-    px(bx+5*s, by+8*s, 1*s, 1*s, "#111");
-  } else {
-    px(bx+8*s, by+7*s, 4*s, 3*s, skin);
-    px(bx+10*s, by+8*s, 1*s, 1*s, "#111");
-  }
-  // bras + katana (visible de côté / bas)
-  if (dir==="right"){
-    px(bx+12*s, by+12*s, 3*s, 6*s, mid);
-    px(bx+15*s, by+6*s, 2*s, 12*s, "#cfd6e0"); // lame
-    px(bx+15*s, by+16*s, 2*s, 3*s, band);
-  } else if (dir==="left"){
-    px(bx+1*s, by+12*s, 3*s, 6*s, mid);
-    px(bx-1*s, by+6*s, 2*s, 12*s, "#cfd6e0");
-    px(bx-1*s, by+16*s, 2*s, 3*s, band);
-  } else {
-    px(bx+1*s, by+12*s, 3*s, 6*s, mid);
-    px(bx+12*s, by+12*s, 3*s, 6*s, mid);
-  }
+  flashShop = "Acheté : " + item.nom + " !"; flashTimer = 90;
+  spawnParts(W/2, 160, "#d8b45a", 14, 2.4, 30, 0.05);
 }
 
-// Sprite ennemi générique, coloré selon le type
-function drawEnemy(cx, cy, color, flash, scale){
-  const s = scale||1;
-  ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.beginPath();
-  ctx.ellipse(cx, cy+16*s, 14*s, 5*s, 0, 0, Math.PI*2);
-  ctx.fill();
-  const body = flash>0 ? "#ffffff" : color;
-  const bx = cx-10*s, by = cy-18*s;
-  // jambes
-  px(bx+4*s, by+22*s, 5*s, 7*s, "#20242c");
-  px(bx+11*s, by+22*s, 5*s, 7*s, "#20242c");
-  // corps
-  px(bx+2*s, by+10*s, 16*s, 14*s, body);
-  // armure sombre
-  px(bx+2*s, by+16*s, 16*s, 3*s, "#161a20");
-  // tête
-  px(bx+5*s, by+2*s, 10*s, 9*s, flash>0?"#fff":"#20242c");
-  // yeux rouges
-  px(bx+7*s, by+6*s, 2*s, 2*s, "#ff3a3a");
-  px(bx+11*s, by+6*s, 2*s, 2*s, "#ff3a3a");
-  // cornes / crête
-  px(bx+4*s, by, 2*s, 3*s, body);
-  px(bx+14*s, by, 2*s, 3*s, body);
-  // bras + arme
-  px(bx-2*s, by+11*s, 4*s, 8*s, body);
-  px(bx+18*s, by+11*s, 4*s, 8*s, body);
-  px(bx+21*s, by+2*s, 2*s, 18*s, "#8a8f99"); // lame
+/* ================================ MESSAGES ================================ */
+let msg = { lignes:[], suite:null, fond:"map" };
+function showMessage(lignes, suite, fond){
+  msg.lignes = Array.isArray(lignes) ? lignes : [lignes];
+  msg.suite = suite || function(){ state = S.MAP; };
+  msg.fond = fond || "map";
+  state = S.MSG;
+}
+let selCursor = 0, evoCursor = 0;
+
+/* ================================= CARTE ================================== */
+const buildings = [
+  { id:"donjon", label:"DONJON",
+    rect:{ x:315, y:38, w:180, h:118 }, porte:{ x:381, y:130, w:38, h:26 } },
+  { id:"forgeron", label:"FORGERON",   // le forgeron, en hauteur à l'ouest
+    rect:{ x:66, y:178, w:162, h:104 }, porte:{ x:115, y:256, w:30, h:26 } },
+  { id:"apothicaire", label:"APOTHICAIRE",
+    rect:{ x:592, y:198, w:150, h:98 }, porte:{ x:650, y:272, w:30, h:24 } },
+];
+const trees = [
+  {x:75,y:112},{x:185,y:66},{x:545,y:80},{x:756,y:132},{x:762,y:398},
+  {x:48,y:378},{x:96,y:556},{x:420,y:576},{x:252,y:562},{x:540,y:172},
+];
+const rocks = [ {x:748,y:252},{x:186,y:426},{x:620,y:120},{x:300,y:238} ];
+const pondRect = { x:565, y:458, w:162, h:88 };
+const walls = [
+  {x:0,y:0,w:W,h:24},{x:0,y:H-24,w:W,h:24},{x:0,y:0,w:24,h:H},{x:W-24,y:0,w:24,h:H},
+  pondRect,
+];
+for (const b of buildings) walls.push(b.rect);
+for (const t of trees) walls.push({x:t.x-9,y:t.y-7,w:18,h:14});
+
+function rectsOverlap(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+function playerBox(nx,ny){
+  return { x:(nx===undefined?player.x:nx)-player.w/2, y:(ny===undefined?player.y:ny)-player.h/2, w:player.w, h:player.h };
+}
+function collides(nx,ny){
+  const box = playerBox(nx,ny);
+  for (const wl of walls) if (rectsOverlap(box,wl)) return true;
+  return false;
+}
+function nearDoor(){
+  const box = playerBox();
+  const zone = { x:box.x-10, y:box.y-10, w:box.w+20, h:box.h+20 };
+  for (const b of buildings) if (rectsOverlap(zone, b.porte)) return b;
+  return null;
 }
 
-/* ---------------------------------------------------------------------------
-   DESSIN : CARTE
---------------------------------------------------------------------------- */
-function drawGround(){
-  // herbe avec motif
-  for (let y=0; y<H; y+=32){
-    for (let x=0; x<W; x+=32){
-      const c = ((x+y)/32) % 2 === 0 ? "#243a24" : "#203520";
-      px(x, y, 32, 32, c);
+/* ----------------------- SOL PRÉ-CALCULÉ (RÉALISTE) ----------------------- */
+const groundCv = document.createElement("canvas"); groundCv.width = W; groundCv.height = H;
+(function(){
+  const g = groundCv.getContext("2d");
+  const gr = g.createLinearGradient(0,0,0,H);
+  gr.addColorStop(0,"#4d7440"); gr.addColorStop(0.5,"#3f6434"); gr.addColorStop(1,"#33532a");
+  g.fillStyle = gr; g.fillRect(0,0,W,H);
+  // marbrures d'herbe
+  for (let i=0;i<1500;i++){
+    const x = Math.random()*W, y = Math.random()*H, r = 3+Math.random()*14;
+    g.fillStyle = ["rgba(22,44,18,0.09)","rgba(96,140,66,0.07)","rgba(255,244,190,0.025)"][i%3];
+    g.beginPath(); g.ellipse(x,y,r,r*0.5,0,0,6.3); g.fill();
+  }
+  // brins d'herbe
+  g.strokeStyle = "rgba(20,40,16,0.25)"; g.lineWidth = 1;
+  for (let i=0;i<650;i++){
+    const x = Math.random()*W, y = Math.random()*H;
+    g.beginPath(); g.moveTo(x,y); g.lineTo(x+(Math.random()*2-1), y-3-Math.random()*3); g.stroke();
+  }
+  // sentiers en terre battue
+  function sentier(x1,y1,x2,y2,cx,cy){
+    for (const cfg of [["#5f5036",30],["#6f5e40",21],["#7d6b4a",13]]){
+      g.strokeStyle = cfg[0]; g.lineWidth = cfg[1]; g.lineCap = "round";
+      g.beginPath(); g.moveTo(x1,y1); g.quadraticCurveTo(cx,cy,x2,y2); g.stroke();
+    }
+    for (let i=0;i<14;i++){
+      const t = Math.random(), it = 1-t;
+      const px2 = it*it*x1 + 2*it*t*cx + t*t*x2 + (Math.random()*14-7);
+      const py2 = it*it*y1 + 2*it*t*cy + t*t*y2 + (Math.random()*14-7);
+      g.fillStyle = Math.random()<0.5 ? "rgba(90,78,56,0.8)" : "rgba(120,106,78,0.8)";
+      g.beginPath(); g.ellipse(px2,py2,1.6+Math.random()*1.6,1.1+Math.random(),0,0,6.3); g.fill();
     }
   }
-  // sentiers reliant les bâtiments à un carrefour central
-  ctx.strokeStyle = "#6b5a3a";
-  ctx.lineWidth = 16;
-  ctx.lineCap = "round";
-  const carr = {x:330, y:280};
-  const paths = [
-    [carr.x, carr.y, 320, 132],   // vers donjon
-    [carr.x, carr.y, 531, 250],   // vers apothicaire
-    [carr.x, carr.y, 185, 428],   // vers forgeron
-  ];
-  ctx.strokeStyle = "#5a4a2e";
-  for (const p of paths){
-    ctx.beginPath(); ctx.moveTo(p[0],p[1]); ctx.lineTo(p[2],p[3]); ctx.stroke();
+  g.fillStyle = "#6f5e40";
+  g.beginPath(); g.ellipse(400,398,34,24,0,0,6.3); g.fill();
+  sentier(400,398,400,172, 396,290);
+  sentier(400,398,663,308, 560,380);
+  sentier(400,398,142,298, 250,380);
+  // étang
+  g.fillStyle = "#8a7a58"; g.beginPath(); g.ellipse(646,502,86,50,0,0,6.3); g.fill();
+  const wg = g.createRadialGradient(636,492,8,646,502,84);
+  wg.addColorStop(0,"#3f7fae"); wg.addColorStop(0.6,"#2a5c88"); wg.addColorStop(1,"#1c3f60");
+  g.fillStyle = wg; g.beginPath(); g.ellipse(646,502,78,43,0,0,6.3); g.fill();
+  g.strokeStyle = "rgba(10,25,40,0.5)"; g.lineWidth = 2;
+  g.beginPath(); g.ellipse(646,502,78,43,0,0,6.3); g.stroke();
+  g.fillStyle = "#2e5e2a";
+  for (const lp of [[610,488,9],[688,516,7],[662,478,5]]){
+    g.beginPath(); g.ellipse(lp[0],lp[1],lp[2],lp[2]*0.6,0,0,6.3); g.fill();
   }
-  // bordure de pierre
-  ctx.lineWidth = 1;
+  // rochers
+  for (const r of rocks){
+    g.fillStyle = "rgba(0,0,0,0.25)"; g.beginPath(); g.ellipse(r.x+2,r.y+5,13,5,0,0,6.3); g.fill();
+    const rg2 = g.createLinearGradient(r.x-10,r.y-10,r.x+8,r.y+6);
+    rg2.addColorStop(0,"#9aa0a8"); rg2.addColorStop(1,"#5c6068");
+    g.fillStyle = rg2;
+    g.beginPath(); g.moveTo(r.x-12,r.y+5); g.lineTo(r.x-7,r.y-8); g.lineTo(r.x+2,r.y-11);
+    g.lineTo(r.x+11,r.y-4); g.lineTo(r.x+12,r.y+5); g.closePath(); g.fill();
+    g.fillStyle = "rgba(255,255,255,0.18)";
+    g.beginPath(); g.moveTo(r.x-6,r.y-7); g.lineTo(r.x+1,r.y-10); g.lineTo(r.x+3,r.y-6); g.closePath(); g.fill();
+  }
+  // fleurs
+  for (let i=0;i<90;i++){
+    const x = 30+Math.random()*(W-60), y = 30+Math.random()*(H-60);
+    const c = ["#e8e0f0","#f0d060","#e07a8a","#8ab0e8"][i%4];
+    g.fillStyle = c;
+    for (let p=0;p<4;p++){
+      const a = p*Math.PI/2 + 0.5;
+      g.fillRect(x+Math.cos(a)*1.8-0.8, y+Math.sin(a)*1.8-0.8, 1.7, 1.7);
+    }
+    g.fillStyle = "#c89830"; g.fillRect(x-0.8,y-0.8,1.6,1.6);
+  }
+  // arbres (feuillage superposé + ombre)
+  for (const t of trees){
+    g.fillStyle = "rgba(0,0,0,0.28)";
+    g.beginPath(); g.ellipse(t.x+4,t.y+8,20,7,0,0,6.3); g.fill();
+    g.fillStyle = "#4a3520"; g.fillRect(t.x-3,t.y-10,6,18);
+    g.fillStyle = "#332415"; g.fillRect(t.x+1,t.y-10,2,18);
+    for (const fo of [[0,-26,20,"#25491f"],[-9,-20,14,"#2f5c27"],[8,-21,13,"#2f5c27"],[0,-30,13,"#3d7331"],[-4,-24,9,"#4c8a3c"]]){
+      g.fillStyle = fo[3];
+      g.beginPath(); g.arc(t.x+fo[0], t.y+fo[1], fo[2], 0, 6.3); g.fill();
+    }
+    g.fillStyle = "rgba(255,250,200,0.14)";
+    g.beginPath(); g.arc(t.x-5, t.y-31, 6, 0, 6.3); g.fill();
+  }
+  // haie sombre en bordure
+  g.fillStyle = "#1e3a19";
+  for (let x=0;x<W;x+=17){
+    g.beginPath(); g.arc(x, 8+Math.sin(x)*3, 15, 0, 6.3); g.fill();
+    g.beginPath(); g.arc(x, H-8+Math.cos(x)*3, 15, 0, 6.3); g.fill();
+  }
+  for (let y=0;y<H;y+=17){
+    g.beginPath(); g.arc(8+Math.sin(y)*3, y, 15, 0, 6.3); g.fill();
+    g.beginPath(); g.arc(W-8+Math.cos(y)*3, y, 15, 0, 6.3); g.fill();
+  }
+  g.fillStyle = "rgba(70,120,55,0.35)";
+  for (let x=0;x<W;x+=23){
+    g.beginPath(); g.arc(x, 4, 9, 0, 6.3); g.fill();
+    g.beginPath(); g.arc(x+9, H-6, 9, 0, 6.3); g.fill();
+  }
+})();
+const clouds = [
+  {x:120,y:110,rx:150,ry:64,v:0.045},{x:520,y:330,rx:190,ry:80,v:0.03},{x:700,y:60,rx:120,ry:55,v:0.055},
+];
+
+/* ------------------------------ TORCHE ANIMÉE ----------------------------- */
+function drawTorch(x,y,s){
+  s = s||1;
+  ctx.fillStyle = "#3a2a18"; ctx.fillRect(x-2*s, y, 4*s, 18*s);
+  ctx.fillStyle = "#584022"; ctx.fillRect(x-3*s, y-2*s, 6*s, 4*s);
+  const fl = Math.sin(time/90 + x*1.7)*2.2*s;
+  const g2 = ctx.createRadialGradient(x, y-6*s, 1, x, y-6*s, 46*s);
+  g2.addColorStop(0,"rgba(255,180,70,0.30)"); g2.addColorStop(1,"rgba(255,180,70,0)");
+  ctx.fillStyle = g2; ctx.fillRect(x-46*s, y-52*s, 92*s, 92*s);
+  ctx.fillStyle = "#e8742a";
+  ctx.beginPath(); ctx.ellipse(x, y-7*s+fl*0.4, 4.5*s, 9*s, 0, 0, 6.3); ctx.fill();
+  ctx.fillStyle = "#ffb545";
+  ctx.beginPath(); ctx.ellipse(x, y-5*s+fl*0.3, 2.8*s, 6*s, 0, 0, 6.3); ctx.fill();
+  ctx.fillStyle = "#ffe9a0";
+  ctx.beginPath(); ctx.ellipse(x, y-3.5*s+fl*0.2, 1.4*s, 3.2*s, 0, 0, 6.3); ctx.fill();
+  if (Math.random() < 0.12) parts.push({x:x+(Math.random()*6-3)*s, y:y-10*s, vx:(Math.random()-0.5)*0.4,
+    vy:-0.5-Math.random()*0.7, life:26, max:26, color:"#ffb545", size:1.6, grav:-0.005});
 }
 
-function drawBuilding(b){
+/* ---------------------------- ENSEIGNE SUSPENDUE -------------------------- */
+function enseigne(cx, y, texte){
+  ctx.font = "bold 11px Georgia, serif";
+  const w2 = ctx.measureText(texte).width + 22;
+  ctx.strokeStyle = "#3a2c1a"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx-w2/2+6, y-6); ctx.lineTo(cx-w2/2+6, y);
+  ctx.moveTo(cx+w2/2-6, y-6); ctx.lineTo(cx+w2/2-6, y); ctx.stroke();
+  rrFill(cx-w2/2, y, w2, 17, 3, linGrad(cx,y,cx,y+17,[[0,"#4c3a22"],[1,"#332614"]]));
+  rrStroke(cx-w2/2, y, w2, 17, 3, "#1e150a", 1.5);
+  rrStroke(cx-w2/2+1.5, y+1.5, w2-3, 14, 2, "rgba(216,180,90,0.35)", 1);
+  txt(texte, cx, y+12.5, 11, "#e8d29a", "center", "bold 11px Georgia");
+}
+
+/* ------------------------------- BÂTIMENTS -------------------------------- */
+function briques(x,y,w,h,alpha){
+  ctx.strokeStyle = "rgba(0,0,0," + alpha + ")"; ctx.lineWidth = 1;
+  for (let yy=y+11; yy<y+h; yy+=12){
+    ctx.beginPath(); ctx.moveTo(x+2,yy); ctx.lineTo(x+w-2,yy); ctx.stroke();
+  }
+  let row = 0;
+  for (let yy=y; yy<y+h-6; yy+=12){
+    for (let xx=x+((row%2)?11:22); xx<x+w-4; xx+=22){
+      ctx.beginPath(); ctx.moveTo(xx,yy+1); ctx.lineTo(xx,yy+11); ctx.stroke();
+    }
+    row++;
+  }
+}
+function fenetre(x,y,w,h,glow,flicker){
+  const f = flicker ? (0.75+0.25*Math.sin(time/150+x)) : 1;
+  ctx.save();
+  const g2 = ctx.createRadialGradient(x+w/2,y+h/2,1,x+w/2,y+h/2,w*1.6);
+  g2.addColorStop(0,"rgba(255,190,90," + 0.22*f + ")"); g2.addColorStop(1,"rgba(255,190,90,0)");
+  ctx.fillStyle = g2; ctx.fillRect(x-w,y-h,w*3,h*3);
+  ctx.restore();
+  rrFill(x-2,y-2,w+4,h+4,2,"#241a10");
+  rrFill(x,y,w,h,1, linGrad(x,y,x,y+h,[[0,glow?shade("#ffcc66",f):"#182030"],[1,glow?shade("#c87e2a",f):"#0e1420"]]));
+  ctx.strokeStyle = "#241a10"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(x+w/2,y); ctx.lineTo(x+w/2,y+h); ctx.moveTo(x,y+h/2); ctx.lineTo(x+w,y+h/2); ctx.stroke();
+}
+function porteBois(d, arche){
+  rrFill(d.x-3, d.y-4, d.w+6, d.h+4, arche?[d.w/2+3,d.w/2+3,0,0]:2, "#16100a");
+  rrFill(d.x, d.y-1, d.w, d.h+1, arche?[d.w/2,d.w/2,0,0]:1,
+    linGrad(d.x,d.y,d.x,d.y+d.h,[[0,"#5d4426"],[1,"#3a2a16"]]));
+  ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 1;
+  for (let i=1;i<4;i++){
+    ctx.beginPath(); ctx.moveTo(d.x+i*d.w/4, d.y+2); ctx.lineTo(d.x+i*d.w/4, d.y+d.h-1); ctx.stroke();
+  }
+  ctx.fillStyle = "#8a8f99";
+  ctx.fillRect(d.x+2, d.y+5, d.w-4, 2); ctx.fillRect(d.x+2, d.y+d.h-8, d.w-4, 2);
+  ctx.fillStyle = "#d8b45a"; ctx.beginPath(); ctx.arc(d.x+d.w-6, d.y+d.h/2+2, 1.8, 0, 6.3); ctx.fill();
+}
+function drawDonjon(b){
   const r = b.rect;
-  // ombre portée
-  px(r.x+6, r.y+r.h, r.w, 8, "rgba(0,0,0,0.25)");
-  // murs
-  px(r.x, r.y+20, r.w, r.h-20, b.couleur);
-  // toit (triangle)
-  ctx.fillStyle = b.toit;
-  ctx.beginPath();
-  ctx.moveTo(r.x-6, r.y+22);
-  ctx.lineTo(r.x+r.w/2, r.y-8);
-  ctx.lineTo(r.x+r.w+6, r.y+22);
-  ctx.closePath();
-  ctx.fill();
-  // bandeau du toit
-  px(r.x-6, r.y+20, r.w+12, 4, "#2a2018");
-  // fenêtres
-  px(r.x+16, r.y+34, 14, 14, "#12160f");
-  px(r.x+r.w-30, r.y+34, 14, 14, "#12160f");
-  px(r.x+18, r.y+36, 4, 4, "#d8b45a");
-  px(r.x+r.w-28, r.y+36, 4, 4, "#d8b45a");
-  // porte
-  const d = b.porte;
-  px(d.x-2, d.y-2, d.w+4, d.h+2, "#1a1109");
-  px(d.x, d.y, d.w, d.h, "#3a2410");
-  px(d.x+d.w-6, d.y+d.h/2-1, 3, 3, "#d8b45a"); // poignée
-  // enseigne
-  ctx.fillStyle = "#0c0e12";
-  const lw = b.label.length*7 + 10;
-  px(r.x + r.w/2 - lw/2, r.y+2, lw, 12, "#0c0e12");
-  ctx.fillStyle = "#e8d29a";
-  ctx.font = "9px 'Courier New'";
-  ctx.textAlign = "center";
-  ctx.fillText(b.label, r.x+r.w/2, r.y+11);
-
-  // Icône PNJ devant le bâtiment (marchand)
-  if (b.id === "apothicaire") drawVendor(d.x+d.w/2, d.y+28, "#6fae6f", "☺");
-  if (b.id === "forgeron")    drawVendor(d.x+d.w/2, d.y+28, "#c98a4a", "☺");
-}
-
-function drawVendor(cx, cy, color, face){
   ctx.fillStyle = "rgba(0,0,0,0.3)";
-  ctx.beginPath(); ctx.ellipse(cx, cy+10, 8, 3, 0, 0, Math.PI*2); ctx.fill();
-  px(cx-6, cy-2, 12, 12, color);          // robe
-  px(cx-5, cy-12, 10, 10, "#e0c199");     // tête
-  px(cx-3, cy-9, 2, 2, "#111");
-  px(cx+1, cy-9, 2, 2, "#111");
-  px(cx-6, cy-14, 12, 3, "#3a2a1a");      // chapeau/cheveux
+  ctx.beginPath(); ctx.ellipse(r.x+r.w/2+6, r.y+r.h+4, r.w*0.62, 10, 0, 0, 6.3); ctx.fill();
+  // tours latérales
+  for (const tx of [r.x-14, r.x+r.w-14]){
+    rrFill(tx, r.y+8, 28, r.h-4, 3, linGrad(tx,0,tx+28,0,[[0,"#6a6e7a"],[0.5,"#565a66"],[1,"#41444e"]]));
+    for (let mx=tx+1; mx<tx+24; mx+=8) rrFill(mx, r.y+2, 5, 8, 1, "#565a66");
+  }
+  // corps
+  rrFill(r.x, r.y+14, r.w, r.h-14, 2, linGrad(r.x,0,r.x+r.w,0,[[0,"#6e727e"],[0.5,"#595d69"],[1,"#464a54"]]));
+  briques(r.x, r.y+14, r.w, r.h-14, 0.18);
+  // créneaux
+  for (let mx=r.x+6; mx<r.x+r.w-8; mx+=17) rrFill(mx, r.y+4, 10, 12, 1, "#595d69");
+  ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fillRect(r.x, r.y+14, r.w, 3);
+  // meurtrières
+  for (const mx of [r.x+34, r.x+r.w/2, r.x+r.w-38]){
+    rrFill(mx-2, r.y+36, 4, 14, 2, "#0c0e14");
+    rrFill(mx-1, r.y+38, 2, 10, 1, "#1c2438");
+  }
+  // bannières
+  for (const bx of [r.x+16, r.x+r.w-24]){
+    const sw = Math.sin(time/400+bx)*2;
+    ctx.fillStyle = "#8f2334";
+    ctx.beginPath(); ctx.moveTo(bx,r.y+52); ctx.lineTo(bx+9,r.y+52);
+    ctx.lineTo(bx+9+sw, r.y+82); ctx.lineTo(bx+4.5+sw, r.y+76); ctx.lineTo(bx+sw, r.y+82);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#d8b45a"; ctx.fillRect(bx-1, r.y+50, 11, 3);
+  }
+  // grande porte + herse
+  const d = b.porte;
+  porteBois(d, true);
+  ctx.strokeStyle = "rgba(20,14,8,0.85)"; ctx.lineWidth = 2;
+  for (let i=1;i<4;i++){
+    ctx.beginPath(); ctx.moveTo(d.x+i*d.w/4, d.y-2); ctx.lineTo(d.x+i*d.w/4, d.y+9); ctx.stroke();
+  }
+  drawTorch(d.x-11, d.y+2, 0.9); drawTorch(d.x+d.w+11, d.y+2, 0.9);
+  enseigne(r.x+r.w/2, r.y+92, "DONJON");
+}
+function drawApothicaire(b){
+  const r = b.rect;
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.beginPath(); ctx.ellipse(r.x+r.w/2+5, r.y+r.h+3, r.w*0.58, 9, 0, 0, 6.3); ctx.fill();
+  // mur à colombage
+  rrFill(r.x, r.y+30, r.w, r.h-30, 2, linGrad(r.x,r.y,r.x,r.y+r.h,[[0,"#d6c9ab"],[1,"#b3a688"]]));
+  ctx.fillStyle = "#5a4228";
+  ctx.fillRect(r.x, r.y+30, r.w, 5); ctx.fillRect(r.x, r.y+r.h-5, r.w, 5);
+  ctx.fillRect(r.x, r.y+30, 5, r.h-30); ctx.fillRect(r.x+r.w-5, r.y+30, 5, r.h-30);
+  ctx.fillRect(r.x+r.w/2-2.5, r.y+30, 5, r.h-30);
+  ctx.strokeStyle = "#5a4228"; ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(r.x+8, r.y+35); ctx.lineTo(r.x+r.w/2-6, r.y+r.h-8); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(r.x+r.w-8, r.y+35); ctx.lineTo(r.x+r.w/2+6, r.y+r.h-8); ctx.stroke();
+  // toit de chaume débordant
+  ctx.beginPath();
+  ctx.moveTo(r.x-14, r.y+34); ctx.lineTo(r.x+r.w/2, r.y-16); ctx.lineTo(r.x+r.w+14, r.y+34);
+  ctx.closePath();
+  ctx.fillStyle = linGrad(r.x, r.y-16, r.x, r.y+34, [[0,"#a8823e"],[0.6,"#8a6a30"],[1,"#6d5322"]]);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(60,42,14,0.5)"; ctx.lineWidth = 1;
+  for (let i=1;i<6;i++){
+    const yy = r.y-16 + i*8.5, sp = 14 + i*((r.w/2+14-14)/6);
+    ctx.beginPath(); ctx.moveTo(r.x+r.w/2-sp+8, yy+i*0.5); ctx.lineTo(r.x+r.w/2+sp-8, yy+i*0.5); ctx.stroke();
+  }
+  ctx.fillStyle = "#5d4a1e"; ctx.fillRect(r.x-14, r.y+32, r.w+28, 5);
+  // fenêtre éclairée + jardinière
+  fenetre(r.x+24, r.y+48, 20, 18, true, false);
+  rrFill(r.x+20, r.y+68, 28, 6, 2, "#4a3520");
+  for (let i=0;i<5;i++){
+    ctx.fillStyle = ["#d85a6a","#e8c05a","#b85ae8"][i%3];
+    ctx.beginPath(); ctx.arc(r.x+24+i*5.2, r.y+66, 2.2, 0, 6.3); ctx.fill();
+  }
+  fenetre(r.x+r.w-46, r.y+48, 20, 18, true, false);
+  porteBois(b.porte, true);
+  // fiole suspendue
+  const d = b.porte;
+  ctx.fillStyle = "#7ae8c8";
+  ctx.beginPath(); ctx.arc(d.x+d.w+13, d.y+6, 4, 0, 6.3); ctx.fill();
+  ctx.fillStyle = "#4a3520"; ctx.fillRect(d.x+d.w+11.7, d.y-2, 2.6, 5);
+  const gg = ctx.createRadialGradient(d.x+d.w+13, d.y+6, 1, d.x+d.w+13, d.y+6, 12);
+  gg.addColorStop(0,"rgba(122,232,200,0.35)"); gg.addColorStop(1,"rgba(122,232,200,0)");
+  ctx.fillStyle = gg; ctx.fillRect(d.x+d.w+1, d.y-6, 24, 24);
+  enseigne(r.x+r.w/2, r.y-30, "APOTHICAIRE");
+}
+function drawForgeron(b){
+  const r = b.rect;
+  ctx.fillStyle = "rgba(0,0,0,0.28)";
+  ctx.beginPath(); ctx.ellipse(r.x+r.w/2+5, r.y+r.h+3, r.w*0.58, 9, 0, 0, 6.3); ctx.fill();
+  // base pierre + étage bois
+  rrFill(r.x, r.y+58, r.w, r.h-58, 2, linGrad(r.x,0,r.x+r.w,0,[[0,"#6e727e"],[1,"#4a4e58"]]));
+  briques(r.x, r.y+58, r.w, r.h-58, 0.16);
+  rrFill(r.x+3, r.y+26, r.w-6, 34, 2, linGrad(r.x,r.y+26,r.x,r.y+60,[[0,"#7a5c36"],[1,"#5a4226"]]));
+  ctx.strokeStyle = "rgba(30,20,10,0.5)"; ctx.lineWidth = 1;
+  for (let xx=r.x+14; xx<r.x+r.w-6; xx+=13){
+    ctx.beginPath(); ctx.moveTo(xx, r.y+28); ctx.lineTo(xx, r.y+58); ctx.stroke();
+  }
+  // toit d'ardoise
+  ctx.beginPath();
+  ctx.moveTo(r.x-13, r.y+30); ctx.lineTo(r.x+r.w/2, r.y-12); ctx.lineTo(r.x+r.w+13, r.y+30);
+  ctx.closePath();
+  ctx.fillStyle = linGrad(r.x, r.y-12, r.x, r.y+30, [[0,"#5d6270"],[1,"#3c404c"]]);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.35)";
+  for (let i=1;i<5;i++){
+    const yy = r.y-12+i*8.4, sp2 = (i/5)*(r.w/2+13);
+    ctx.beginPath(); ctx.moveTo(r.x+r.w/2-sp2, yy); ctx.lineTo(r.x+r.w/2+sp2, yy); ctx.stroke();
+  }
+  ctx.fillStyle = "#2c3038"; ctx.fillRect(r.x-13, r.y+28, r.w+26, 5);
+  // cheminée + fumée
+  rrFill(r.x+r.w-42, r.y-26, 16, 34, 2, "#565a66");
+  ctx.fillStyle = "#3c404c"; ctx.fillRect(r.x+r.w-44, r.y-28, 20, 5);
+  if (Math.random() < 0.2) parts.push({x:r.x+r.w-34+(Math.random()*8-4), y:r.y-30,
+    vx:(Math.random()-0.3)*0.3, vy:-0.4-Math.random()*0.4, life:90, max:90,
+    color:"rgba(190,190,200,0.5)", size:3.5+Math.random()*3, grav:-0.004});
+  // fenêtre de forge rougeoyante
+  fenetre(r.x+r.w-52, r.y+72, 22, 18, true, true);
+  fenetre(r.x+26, r.y+72, 18, 14, false, false);
+  porteBois(b.porte, false);
+  // enclume devant
+  const ax = r.x+r.w-28, ay = r.y+r.h+8;
+  ctx.fillStyle = "rgba(0,0,0,0.3)"; ctx.beginPath(); ctx.ellipse(ax,ay+7,12,3.5,0,0,6.3); ctx.fill();
+  rrFill(ax-8, ay+2, 16, 5, 1, "#3a3e48");
+  rrFill(ax-5, ay-2, 10, 5, 1, "#4a4e58");
+  rrFill(ax-11, ay-6, 22, 5, 2, linGrad(ax-11,ay-6,ax-11,ay-1,[[0,"#7a7e88"],[1,"#4a4e58"]]));
+  ctx.beginPath(); ctx.moveTo(ax+11,ay-6); ctx.lineTo(ax+17,ay-4.5); ctx.lineTo(ax+11,ay-1);
+  ctx.closePath(); ctx.fillStyle = "#6a6e78"; ctx.fill();
+  enseigne(r.x+r.w/2, r.y-26, "FORGERON");
+}
+function drawBuilding(b){
+  if (b.id === "donjon") drawDonjon(b);
+  else if (b.id === "apothicaire") drawApothicaire(b);
+  else drawForgeron(b);
 }
 
-function drawMap(){
-  drawGround();
-  // dessiner bâtiments (tri par y pour la profondeur)
-  const sorted = buildings.slice().sort((a,b)=>a.rect.y-b.rect.y);
-  const heroBehind = [];
-  for (const b of sorted){
-    // héros derrière/devant selon y
-    drawBuilding(b);
+/* ------------------------------- PNJ MARCHANDS ---------------------------- */
+function drawVendor(x,y,type){
+  const bob = Math.sin(time/450 + x)*1.2;
+  ctx.save(); ctx.translate(x, y+bob);
+  const sg = ctx.createRadialGradient(0,2,1,0,2,11);
+  sg.addColorStop(0,"rgba(0,0,0,0.35)"); sg.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.ellipse(0,2,11,4,0,0,6.3); ctx.fill();
+  const c1 = type==="apoth" ? "#4a7a46" : "#6a4a30";
+  const c2 = type==="apoth" ? "#355932" : "#4a3420";
+  ctx.beginPath(); ctx.moveTo(-7,-14); ctx.lineTo(-9,0); ctx.lineTo(9,0); ctx.lineTo(7,-14); ctx.closePath();
+  ctx.fillStyle = linGrad(-9,-14,9,0,[[0,c1],[1,c2]]); ctx.fill();
+  if (type==="forge"){
+    ctx.fillStyle = "#8a8f99";
+    ctx.beginPath(); ctx.moveTo(-5,-13); ctx.lineTo(-6,-1); ctx.lineTo(6,-1); ctx.lineTo(5,-13); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#6a6e78"; ctx.fillRect(-6,-8,12,1.5);
   }
-  // héros
-  drawHero(player.x, player.y, player.dir, player.moving, player.animTime, 1);
+  ctx.fillStyle = c2; ctx.fillRect(-9,-13,3,8); ctx.fillRect(6,-13,3,8);
+  ctx.fillStyle = "#e2b68e"; rrFill(-4.5,-23,9,8.5,3,"#e2b68e");
+  ctx.fillStyle = "#22242c"; ctx.fillRect(-2.4,-19.6,1.5,1.5); ctx.fillRect(1,-19.6,1.5,1.5);
+  if (type==="apoth"){
+    ctx.fillStyle = "#355932";
+    ctx.beginPath(); ctx.ellipse(0,-23,7,2.4,0,0,6.3); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-4,-23); ctx.lineTo(0,-31); ctx.lineTo(4,-23); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#7ae8c8"; ctx.beginPath(); ctx.arc(7.5,-9,3,0,6.3); ctx.fill();
+  } else {
+    ctx.fillStyle = "#7a5a3a"; ctx.fillRect(-4.5,-16.5,9,4);
+    ctx.fillStyle = "#4a4e58"; ctx.fillRect(7,-14,2.2,7);
+    ctx.fillStyle = "#6a6e78"; ctx.fillRect(5.2,-15.5,6,3);
+  }
+  ctx.restore();
+}
 
-  // invite d'action
-  const b = nearDoor();
-  if (b){
-    const txt = b.id==="donjon" ? "E : Entrer combattre"
-              : b.id==="apothicaire" ? "E : Parler à l'apothicaire"
-              : "E : Parler au forgeron";
-    const bx = player.x, by = player.y - 30;
-    ctx.font = "10px 'Courier New'";
-    ctx.textAlign = "center";
-    const tw = ctx.measureText(txt).width + 12;
-    px(bx-tw/2, by-11, tw, 15, "rgba(8,10,16,0.85)");
-    ctx.fillStyle = "#d8b45a";
-    ctx.fillText(txt, bx, by);
+/* ============================ HÉROS (PAR CLASSE) ========================== */
+const PALETTES = {
+  guerrier:{ c1:"#9a4438", c2:"#6e2f26", trim:"#d8b45a", metal:"#b9c2cf", metalD:"#8a93a3" },
+  ombre:   { c1:"#333a5e", c2:"#20253e", trim:"#8f7ae8", metal:"#d5dbe6", metalD:"#9aa2b2" },
+  mage:    { c1:"#63407f", c2:"#472c5e", trim:"#e8c05a", metal:"#cfd8ea", metalD:"#98a2b8" },
+};
+function drawHero(x,y,dir,moving,t,s,clsId,evoCol){
+  const P = PALETTES[clsId] || PALETTES.guerrier;
+  const accent = evoCol || P.trim;
+  const skin = "#e2b68e";
+  ctx.save(); ctx.translate(x,y);
+  const sg = ctx.createRadialGradient(0,1,1,0,1,11*s/2.2);
+  sg.addColorStop(0,"rgba(0,0,0,0.4)"); sg.addColorStop(1,"rgba(0,0,0,0)");
+  ctx.fillStyle = sg; ctx.beginPath(); ctx.ellipse(0,1,10*s/2.2,4*s/2.2,0,0,6.3); ctx.fill();
+  ctx.scale(s/2.2, s/2.2);
+  if (dir==="left") ctx.scale(-1,1);
+  const face = (dir==="left") ? "right" : dir;
+  const wk = moving ? Math.sin(t*0.02) : 0;
+  const bob = moving ? -Math.abs(Math.sin(t*0.02))*1.4 : Math.sin(t*0.004)*0.5;
+  ctx.translate(0,bob);
+  // écharpe flottante (derrière) pour la lame des ombres
+  if (clsId==="ombre"){
+    const wv = Math.sin(t*0.01)*2;
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.moveTo(-3,-23); ctx.lineTo(-11-wv,-19); ctx.lineTo(-12-wv,-15);
+    ctx.lineTo(-4,-19); ctx.closePath(); ctx.fill();
   }
+  // cape dans le dos (vue de dos)
+  if (face==="up"){
+    ctx.fillStyle = shade(P.c2,0.8);
+    ctx.beginPath(); ctx.moveTo(-6,-23); ctx.lineTo(-7,-9+wk); ctx.lineTo(7,-9-wk); ctx.lineTo(6,-23);
+    ctx.closePath(); ctx.fill();
+  }
+  // jambes / bas de robe
+  if (clsId==="mage"){
+    ctx.beginPath(); ctx.moveTo(-6,-13); ctx.lineTo(-8,0); ctx.lineTo(8,0); ctx.lineTo(6,-13); ctx.closePath();
+    ctx.fillStyle = linGrad(-8,-13,8,0,[[0,P.c1],[1,P.c2]]); ctx.fill();
+    ctx.fillStyle = accent; ctx.globalAlpha = 0.8; ctx.fillRect(-8,-2,16,1.6); ctx.globalAlpha = 1;
+  } else {
+    ctx.fillStyle = "#23262e";
+    ctx.fillRect(-4.6+wk*2.2,-9,4,9.2);
+    ctx.fillRect(0.8-wk*2.2,-9,4,9.2);
+    ctx.fillStyle = "#15171d";
+    ctx.fillRect(-4.6+wk*2.2,-2.6,4,2.8);
+    ctx.fillRect(0.8-wk*2.2,-2.6,4,2.8);
+  }
+  // torse
+  rrFill(-6.5,-23,13,12,3, linGrad(-6,-23,6,-11,[[0,P.c1],[1,P.c2]]));
+  ctx.fillStyle = "rgba(0,0,0,0.16)"; ctx.fillRect(1.8,-22,4.4,10.4);
+  ctx.fillStyle = "#2c2115"; ctx.fillRect(-6.5,-13.4,13,2.6);
+  ctx.fillStyle = accent; ctx.fillRect(-1.2,-13.6,2.6,3);
+  // détails de classe
+  if (clsId==="guerrier"){
+    rrFill(-4.6,-22,9.2,6.6,2, linGrad(-4,-22,4,-15,[[0,P.metal],[1,P.metalD]]));
+    ctx.fillStyle = P.metalD;
+    ctx.beginPath(); ctx.arc(-7,-21.4,2.7,0,6.3); ctx.fill();
+    ctx.beginPath(); ctx.arc(7,-21.4,2.7,0,6.3); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.beginPath(); ctx.arc(-7.7,-22.1,0.9,0,6.3); ctx.fill();
+  } else if (clsId==="ombre"){
+    ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.moveTo(-6,-22); ctx.lineTo(6,-14); ctx.stroke();
+    ctx.fillStyle = accent; ctx.fillRect(-5.4,-24.4,10.8,2.6);
+  } else {
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.moveTo(0,-21); ctx.lineTo(2.2,-18.4); ctx.lineTo(0,-15.8); ctx.lineTo(-2.2,-18.4);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = "rgba(232,192,90,0.5)"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(-6.5,-12.4); ctx.lineTo(6.5,-12.4); ctx.stroke();
+  }
+  // bras
+  ctx.fillStyle = P.c2;
+  rrFill(-8.6,-22,3.2,8.4,1.4,P.c2);
+  rrFill(5.4,-22,3.2,8.4,1.4,P.c2);
+  // tête
+  rrFill(-4.6,-32.6,9.2,8.4,3, skin);
+  if (face==="down"){
+    ctx.fillStyle = "#20222a"; ctx.fillRect(-2.6,-28.8,1.5,1.6); ctx.fillRect(1.1,-28.8,1.5,1.6);
+  } else if (face==="right"){
+    ctx.fillStyle = "#20222a"; ctx.fillRect(1.6,-28.8,1.6,1.6);
+  }
+  // couvre-chef par classe
+  if (clsId==="guerrier"){
+    rrFill(-5.2,-34.4,10.4,6.2,3, linGrad(-5,-34,5,-28,[[0,P.metal],[1,P.metalD]]));
+    if (face!=="up") { ctx.fillStyle = P.metalD; ctx.fillRect(-0.8,-30.4,1.6,3.6); }
+    ctx.fillStyle = accent;
+    ctx.beginPath(); ctx.moveTo(-1,-34); ctx.quadraticCurveTo(0,-40,-4,-39); ctx.quadraticCurveTo(-1.5,-37.5,-2.4,-34);
+    ctx.closePath(); ctx.fill();
+  } else if (clsId==="ombre"){
+    rrFill(-5.2,-34.2,10.4,7,3.4, P.c1);
+    if (face==="up") rrFill(-4.6,-32.6,9.2,8.4,3, P.c1);
+    else { ctx.fillStyle = P.c2; ctx.fillRect(-4.6,-27.4,9.2,3.2); }
+  } else {
+    ctx.fillStyle = P.c2;
+    ctx.beginPath(); ctx.ellipse(0,-31.6,7.4,2.4,0,0,6.3); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-4.6,-31.6); ctx.lineTo(1.4,-43); ctx.lineTo(4.6,-31.6); ctx.closePath();
+    ctx.fillStyle = P.c1; ctx.fill();
+    ctx.fillStyle = accent; ctx.fillRect(-3.6,-33.6,7.6,1.7);
+    if (face==="up") rrFill(-4.6,-32.6,9.2,5,2, P.c2);
+  }
+  // arme
+  if (clsId==="guerrier"){
+    if (face==="down"){
+      ctx.fillStyle = P.metalD;
+      ctx.beginPath(); ctx.ellipse(-8.4,-16.4,3.4,4.2,0,0,6.3); ctx.fill();
+      ctx.fillStyle = accent; ctx.beginPath(); ctx.arc(-8.4,-16.4,1.3,0,6.3); ctx.fill();
+    }
+    ctx.fillStyle = linGrad(8,-30,10,-14,[[0,"#e8edf4"],[1,P.metalD]]);
+    ctx.fillRect(7.8,-29,2.1,13);
+    ctx.beginPath(); ctx.moveTo(7.8,-29); ctx.lineTo(8.85,-32); ctx.lineTo(9.9,-29); ctx.closePath();
+    ctx.fillStyle = "#e8edf4"; ctx.fill();
+    ctx.fillStyle = accent; ctx.fillRect(6.2,-16.4,5.4,1.7);
+    ctx.fillStyle = "#3a2a16"; ctx.fillRect(8,-14.7,1.7,3.6);
+  } else if (clsId==="ombre"){
+    ctx.fillStyle = linGrad(8,-33,9.4,-16,[[0,"#eef2f8"],[1,P.metalD]]);
+    ctx.fillRect(8,-32.4,1.5,16);
+    ctx.fillStyle = accent; ctx.fillRect(6.9,-16.6,3.7,1.4);
+    ctx.fillStyle = "#1c1e26"; ctx.fillRect(8.1,-15.2,1.3,4);
+  } else {
+    ctx.fillStyle = "#6b4e2f"; ctx.fillRect(7.7,-38,1.9,38);
+    ctx.fillStyle = "#543d26"; ctx.fillRect(7.7,-20,1.9,1.4);
+    const og = ctx.createRadialGradient(8.6,-39.6,0.6,8.6,-39.6,7);
+    og.addColorStop(0, accent); og.addColorStop(0.35,"rgba(216,180,90,0.5)"); og.addColorStop(1,"rgba(216,180,90,0)");
+    ctx.fillStyle = og; ctx.beginPath(); ctx.arc(8.6,-39.6,7,0,6.3); ctx.fill();
+    ctx.fillStyle = "#fff2cc"; ctx.beginPath(); ctx.arc(8.6,-39.6,2,0,6.3); ctx.fill();
+  }
+  ctx.restore();
+}
+
+/* ================================= ENNEMIS ================================ */
+const BESTIAIRE = [
+  { nom:"Gobelin des ombres", type:"gobelin", pv:24,  dgt:6,  esq:8,  or:[10,20],  xp:9,  tint:"#5f8a3c", eye:"#ffd23a" },
+  { nom:"Bandit masqué",      type:"bandit",  pv:36,  dgt:9,  esq:14, or:[18,32],  xp:15, tint:"#8a6a42", eye:"#ff4a3a" },
+  { nom:"Spectre errant",     type:"spectre", pv:30,  dgt:9,  esq:26, or:[16,30],  xp:14, tint:"#5c7ec2", eye:"#7ae8ff", flotte:true },
+  { nom:"Rōnin déchu",        type:"ronin",   pv:55,  dgt:13, esq:18, or:[35,60],  xp:28, tint:"#a84848", eye:"#ff3a3a", crit:10 },
+  { nom:"Ogre de guerre",     type:"ogre",    pv:90,  dgt:17, esq:5,  or:[50,85],  xp:42, tint:"#6f7f43", eye:"#ffb03a", taille:1.35 },
+  { nom:"Shōgun spectral",    type:"shogun",  pv:120, dgt:22, esq:22, or:[85,140], xp:70, tint:"#7c4fd0", eye:"#c9a3ff", crit:15, taille:1.15 },
+];
+function creerEnnemi(){
+  const n = Math.min(BESTIAIRE.length, 1 + Math.ceil(player.niveau/1.6));
+  const t = BESTIAIRE[Math.floor(Math.random()*n)];
+  const boost = 1 + (player.niveau-1)*0.13;
+  return {
+    nom:t.nom, type:t.type, tint:t.tint, eye:t.eye, flotte:!!t.flotte,
+    taille:t.taille||1, crit:t.crit||0, esquive:t.esq,
+    pvMax:Math.round(t.pv*boost), pv:Math.round(t.pv*boost),
+    degats:Math.round(t.dgt*boost),
+    or:Math.round(t.or[0]+Math.random()*(t.or[1]-t.or[0])),
+    xp:Math.round(t.xp*boost),
+    hitFlash:0,
+  };
+}
+function drawEnemy(x,y,e,mirror){
+  const s = 2.9*e.taille;
+  const bob = e.flotte ? Math.sin(time/320)*6 : 0;
+  const br = 1 + Math.sin(time/280)*0.022;
+  const fl = e.hitFlash > 0;
+  function col(c){ return fl ? "#ffffff" : c; }
+  ctx.save(); ctx.translate(x, y-bob);
+  ctx.fillStyle = e.flotte ? "rgba(0,0,0,0.2)" : "rgba(0,0,0,0.38)";
+  ctx.beginPath(); ctx.ellipse(0,2,15*e.taille,5*e.taille,0,0,6.3); ctx.fill();
+  ctx.scale(mirror?-s:s, s*br);
+  if (e.flotte) ctx.globalAlpha = 0.85;
+  const D = shade(e.tint, 0.55);
+  // jambes ou traîne spectrale
+  if (e.flotte){
+    ctx.fillStyle = col(D);
+    ctx.beginPath(); ctx.moveTo(-8,-10); ctx.lineTo(-5,-1); ctx.lineTo(-2,-8); ctx.lineTo(1,0);
+    ctx.lineTo(4,-8); ctx.lineTo(7,-2); ctx.lineTo(8,-10); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.fillStyle = col("#20242c");
+    ctx.fillRect(-6.5,-9,5,9); ctx.fillRect(1.5,-9,5,9);
+    ctx.fillStyle = col("#15181e");
+    ctx.fillRect(-6.5,-2.4,5,2.6); ctx.fillRect(1.5,-2.4,5,2.6);
+  }
+  // corps
+  rrFill(-9,-26,18,17,5, fl ? "#ffffff" : linGrad(-9,-26,9,-9,[[0,e.tint],[1,D]]));
+  ctx.fillStyle = col("#1b1e26"); ctx.fillRect(-9,-15,18,3.2);
+  ctx.fillStyle = col(D);
+  rrFill(-12.6,-24,4,10,2, col(D)); rrFill(8.6,-24,4,10,2, col(D));
+  // tête
+  rrFill(-6,-36,12,10,4, col("#262a33"));
+  ctx.save();
+  ctx.shadowColor = e.eye; ctx.shadowBlur = 7;
+  ctx.fillStyle = e.eye;
+  ctx.fillRect(-3.6,-32.6,2.4,2.4); ctx.fillRect(1.4,-32.6,2.4,2.4);
+  ctx.restore();
+  // attributs par type
+  if (e.type==="gobelin"){
+    ctx.fillStyle = col(e.tint);
+    ctx.beginPath(); ctx.moveTo(-6,-33); ctx.lineTo(-11,-36); ctx.lineTo(-6,-30); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(6,-33); ctx.lineTo(11,-36); ctx.lineTo(6,-30); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#e8e8ec"; ctx.fillRect(-2.4,-27.6,1.4,1.6); ctx.fillRect(1,-27.6,1.4,1.6);
+  } else if (e.type==="bandit"){
+    ctx.fillStyle = col("#8f2334"); ctx.fillRect(-6,-37.4,12,2.8);
+    ctx.fillStyle = col("#10131a"); ctx.fillRect(-6,-29.4,12,3.4);
+  } else if (e.type==="ronin" || e.type==="shogun"){
+    ctx.fillStyle = col(e.type==="shogun" ? "#2c2436" : "#5a4a2e");
+    ctx.beginPath(); ctx.moveTo(-9.5,-35); ctx.lineTo(0,-42); ctx.lineTo(9.5,-35); ctx.closePath(); ctx.fill();
+    if (e.type==="shogun"){
+      ctx.strokeStyle = col("#d8b45a"); ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-4,-40); ctx.quadraticCurveTo(-9,-46,-7,-50); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(4,-40); ctx.quadraticCurveTo(9,-46,7,-50); ctx.stroke();
+    }
+  } else if (e.type==="ogre"){
+    ctx.fillStyle = "#e8e0d0";
+    ctx.beginPath(); ctx.moveTo(-4,-27); ctx.lineTo(-5.5,-23.6); ctx.lineTo(-2.6,-26.6); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(4,-27); ctx.lineTo(5.5,-23.6); ctx.lineTo(2.6,-26.6); ctx.closePath(); ctx.fill();
+  }
+  // arme
+  if (e.type==="ogre" || e.type==="gobelin"){
+    ctx.save(); ctx.translate(12,-18); ctx.rotate(0.5);
+    rrFill(-1.6,-14,3.2,16,1.6, col("#5a4128"));
+    rrFill(-2.8,-16,5.6,6,2.4, col("#4a3520"));
+    ctx.fillStyle = col("#8a8f99");
+    ctx.fillRect(-2.2,-15,1.4,1.4); ctx.fillRect(1,-12.6,1.4,1.4);
+    ctx.restore();
+  } else if (e.type!=="spectre"){
+    ctx.fillStyle = fl ? "#fff" : linGrad(11,-34,13,-12,[[0,"#eef2f8"],[1,"#8a93a3"]]);
+    ctx.fillRect(11,-33,1.9,20);
+    ctx.fillStyle = col("#d8b45a"); ctx.fillRect(9.6,-14,4.7,1.6);
+  }
+  ctx.restore();
+  if (e.hitFlash > 0) e.hitFlash--;
+}
+
+/* ============================ LOGIQUE : COMBAT ============================ */
+const HX = 205, HY = 432, EX = 560, EY = 372;
+function entrerDonjon(){
+  combat = {
+    ennemi: creerEnnemi(), tour:"joueur", cursor:0, anim:0, fini:false,
+    buff:null, voile:0, critNext:false, poison:null,
+    playerFlash:0, heroLunge:0, enemyLunge:0, flash:null, intro:60,
+  };
+  player.energie = energieMax();
+  combatLog.length = 0;
+  log("Un " + combat.ennemi.nom + " surgit des ténèbres !");
+  state = S.COMBAT;
+}
+function frapper(mult, opts){
+  opts = opts || {};
+  const e = combat.ennemi;
+  if (!opts.imparable && Math.random()*100 < e.esquive){
+    log("Le " + e.nom + " esquive !");
+    addFloat(EX, EY-120, "Esquive", "#9aa0ac", 14);
+    return 0;
+  }
+  let d = Math.round(degatsAttaque()*mult*(0.9+Math.random()*0.25));
+  if (combat.critNext){ d = Math.round(d*2.5); combat.critNext = false; addFloat(EX, EY-146, "CRITIQUE !", "#ffd34a", 17); }
+  e.pv = Math.max(0, e.pv-d); e.hitFlash = 9;
+  combat.heroLunge = 12;
+  spawnParts(EX, EY-56, "#ff6a4a", 14, 3, 26, 0.12);
+  spawnParts(EX, EY-56, "#ffe9a0", 6, 2.2, 20, 0.1);
+  addFloat(EX, EY-120, "-"+d, "#ffffff", 16);
+  log((opts.label ? opts.label + " : " : "Vous infligez ") + d + " dégâts" + (opts.label?" !":"."));
+  return d;
+}
+function degatsMagiques(base, label, col){
+  const e = combat.ennemi;
+  const d = Math.round(base*(0.9+Math.random()*0.25));
+  e.pv = Math.max(0, e.pv-d); e.hitFlash = 11;
+  combat.flash = { col:col, t:13 };
+  spawnParts(EX, EY-60, col, 26, 3.4, 32, 0.05);
+  addFloat(EX, EY-124, "-"+d, col, 17);
+  log(label + " : " + d + " dégâts !");
+  return d;
+}
+function soigner(n){
+  n = Math.round(n);
+  player.pv = Math.min(player.pvMax, player.pv+n);
+  spawnParts(HX, HY-60, "#6ae87a", 16, 2, 30, -0.04);
+  addFloat(HX, HY-110, "+"+n, "#6ae87a", 15);
+  log("Vous récupérez " + n + " PV.");
+}
+function attaqueBase(){
+  frapper(1, {});
+  if (combat.ennemi.pv > 0 && Math.random()*100 < doubleChance()){
+    addFloat(EX, EY-146, "Double frappe !", "#8ae8b0", 13);
+    frapper(0.6, { label:"Double frappe" });
+  }
+  apresAction();
+}
+function utiliserCapacite(){
+  const cap = capaciteActuelle();
+  if (player.energie < cap.cout){ log("Énergie insuffisante pour " + cap.nom + " !"); return; }
+  player.energie -= cap.cout;
+  switch(cap.id){
+    case "titan": frapper(2.2, { imparable:true, label:cap.nom }); break;
+    case "danse": for (let i=0;i<3;i++) if (combat.ennemi.pv>0) frapper(0.8, { label:cap.nom }); break;
+    case "feu": degatsMagiques(12 + player.esprit*3.5, cap.nom, "#ff8a3a"); break;
+    case "rage": {
+      const auto = Math.max(1, Math.round(player.pvMax*0.08));
+      player.pv = Math.max(1, player.pv-auto);
+      addFloat(HX, HY-110, "-"+auto, "#ff7a6a", 13);
+      frapper(3.2, { imparable:true, label:cap.nom });
+    } break;
+    case "jugement": frapper(1.8, { imparable:true, label:cap.nom }); soigner(player.pvMax*0.25); break;
+    case "etendard":
+      combat.buff = { force:5, armure:6, esquive:10, tours:4 };
+      combat.flash = { col:"#e8c05a", t:12 };
+      log("Étendard levé ! Force et défense accrues (4 tours).");
+      break;
+    case "voile":
+      combat.voile = 2; combat.critNext = true;
+      combat.flash = { col:"#8f7ae8", t:12 };
+      spawnParts(HX, HY-50, "#8f7ae8", 22, 2.6, 32, -0.02);
+      log("Vous vous fondez dans les ombres...");
+      break;
+    case "estocade": for (let i=0;i<4;i++) if (combat.ennemi.pv>0) frapper(0.7, { label:cap.nom }); break;
+    case "venin":
+      frapper(1.3, { label:cap.nom });
+      if (combat.ennemi.pv > 0){
+        combat.poison = { dgt:4+player.esprit*2, tours:3 };
+        log("Le poison s'insinue dans ses veines !");
+      }
+      break;
+    case "meteore": shake = 14; degatsMagiques(20 + player.esprit*4.5, cap.nom, "#ff5a2a"); break;
+    case "drain": soigner(degatsMagiques(10 + player.esprit*2.8, cap.nom, "#5ae89a")); break;
+    case "benediction":
+      soigner(12 + player.esprit*3);
+      combat.buff = { force:0, armure:6, esquive:0, tours:3 };
+      combat.flash = { col:"#5ab8e8", t:12 };
+      log("Une aura sacrée vous protège (3 tours).");
+      break;
+  }
+  apresAction();
+}
+function boirePotion(){
+  if (player.potions <= 0){ log("Vous n'avez plus de potion !"); return; }
+  player.potions--; soigner(30);
+  apresAction();
+}
+function tenterFuite(){
+  const chance = 30 + player.vitesse*4;
+  if (Math.random()*100 < chance){
+    log("Vous fuyez le combat...");
+    combat.fini = true;
+    setTimeout(function(){ combat = null; state = S.MAP; }, 650);
+  } else {
+    log("Fuite ratée !");
+    finTourJoueur();
+  }
+}
+function apresAction(){
+  if (combat.ennemi.pv <= 0){ victoire(); return; }
+  finTourJoueur();
+}
+function finTourJoueur(){ combat.tour = "ennemi"; combat.anim = 46; }
+function tourEnnemi(){
+  const e = combat.ennemi;
+  combat.enemyLunge = 12;
+  if (combat.voile > 0){
+    combat.voile--;
+    log("Vous êtes insaisissable !");
+    addFloat(HX, HY-110, "Esquive !", "#8f7ae8", 14);
+  } else if (Math.random()*100 < esquivePct()){
+    log("Vous esquivez son attaque !");
+    addFloat(HX, HY-110, "Esquive !", "#7ae8b0", 14);
+  } else {
+    let d = e.degats + Math.floor(Math.random()*4) - armureTotale();
+    d = Math.max(1, d);
+    if (e.crit && Math.random()*100 < e.crit){ d = Math.round(d*1.8); log("Coup critique ennemi !"); }
+    player.pv = Math.max(0, player.pv-d);
+    combat.playerFlash = 10; shake = 9;
+    spawnParts(HX, HY-56, "#ff4a4a", 13, 2.8, 26, 0.12);
+    addFloat(HX, HY-112, "-"+d, "#ff7a6a", 16);
+    log("Le " + e.nom + " vous inflige " + d + " dégâts.");
+  }
+  if (player.pv <= 0){ defaite(); return; }
+  if (combat.buff){
+    combat.buff.tours--;
+    if (combat.buff.tours <= 0){ combat.buff = null; log("Votre aura se dissipe."); }
+  }
+  debutTourJoueur();
+}
+function debutTourJoueur(){
+  combat.tour = "joueur";
+  player.energie = Math.min(energieMax(), player.energie + 6 + player.esprit);
+  if (combat.poison && combat.poison.tours > 0){
+    const e = combat.ennemi, d = combat.poison.dgt;
+    e.pv = Math.max(0, e.pv-d); combat.poison.tours--;
+    e.hitFlash = 6;
+    spawnParts(EX, EY-56, "#5ad86a", 10, 1.8, 26, 0);
+    addFloat(EX, EY-120, "-"+d+" ☠", "#7ae86a", 14);
+    log("Le poison ronge l'ennemi (" + d + ").");
+    if (e.pv <= 0){ victoire(); return; }
+  }
+}
+function levelUp(){
+  player.xp -= player.xpMax; player.niveau++;
+  player.xpMax = Math.round(player.xpMax*1.5);
+  let dpv = 6, df = 1, dv = 1, de = 1;
+  const cid = player.classe.id;
+  if (cid==="guerrier"){ df++; dpv += 4; }
+  else if (cid==="ombre"){ dv++; }
+  else { de++; }
+  player.pvMax += dpv; player.force += df; player.vitesse += dv; player.esprit += de;
+  player.pv = player.pvMax; player.energie = energieMax();
+  return "PV+" + dpv + " · FOR+" + df + " · VIT+" + dv + " · ESP+" + de;
+}
+function victoire(){
+  combat.fini = true;
+  const e = combat.ennemi;
+  spawnParts(EX, EY-56, e.tint, 34, 3.6, 42, 0.08);
+  spawnParts(EX, EY-56, "#ffe9a0", 16, 2.6, 34, 0.05);
+  player.or += e.or; player.xp += e.xp;
+  const soin = player.esprit;
+  player.pv = Math.min(player.pvMax, player.pv + soin);
+  const msgs = ["Victoire !", "Le " + e.nom + " est vaincu.",
+    "Butin : " + e.or + " or · " + e.xp + " XP · +" + soin + " PV (Esprit)"];
+  while (player.xp >= player.xpMax){
+    msgs.push("★ NIVEAU " + (player.niveau+1) + " — " + levelUp());
+  }
+  const evolue = player.niveau >= 5 && !player.evolution;
+  if (evolue) msgs.push("Votre âme s'éveille... Choisissez votre voie !");
+  setTimeout(function(){
+    showMessage(msgs, function(){
+      combat = null;
+      if (evolue){ evoCursor = 0; state = S.EVOLVE; }
+      else state = S.MAP;
+    }, "combat");
+  }, 550);
+}
+function defaite(){
+  combat.fini = true;
+  setTimeout(function(){ combat = null; state = S.GAMEOVER; }, 500);
+}
+function appliquerEvolution(evo){
+  player.evolution = evo;
+  player.pvMax += evo.bonus.pv; player.force += evo.bonus.force;
+  player.vitesse += evo.bonus.vitesse; player.esprit += evo.bonus.esprit;
+  player.pv = player.pvMax; player.energie = energieMax();
+  showMessage(["Vous devenez " + evo.nom + " !",
+    "Nouvelle capacité : " + evo.capacite.nom,
+    evo.capacite.desc], function(){ state = S.MAP; }, "map");
+}
+
+/* ============================ MISES À JOUR (INPUT) ======================== */
+function updateMap(dt){
+  let dx = 0, dy = 0;
+  if (held("arrowleft","q","a")){ dx -= 1; player.dir = "left"; }
+  if (held("arrowright","d")){ dx += 1; player.dir = "right"; }
+  if (held("arrowup","z","w")){ dy -= 1; player.dir = "up"; }
+  if (held("arrowdown","s")){ dy += 1; player.dir = "down"; }
+  player.moving = (dx!==0 || dy!==0);
+  if (player.moving){
+    const len = Math.hypot(dx,dy) || 1, spd = 2.3;
+    const mx = dx/len*spd, my = dy/len*spd;
+    if (!collides(player.x+mx, player.y)) player.x += mx;
+    if (!collides(player.x, player.y+my)) player.y += my;
+    player.animTime += dt;
+  } else player.animTime = 0;
+  const b = nearDoor();
+  if (b && pressed("e","enter"," ")){
+    if (b.id==="donjon") entrerDonjon();
+    else if (b.id==="apothicaire"){ shop = { data:potionShop, cursor:0 }; state = S.SHOP; }
+    else { shop = { data:smithShop, cursor:0 }; state = S.SHOP; }
+  }
+}
+function updateCombat(){
+  if (combat.playerFlash > 0) combat.playerFlash--;
+  if (combat.heroLunge > 0) combat.heroLunge--;
+  if (combat.enemyLunge > 0) combat.enemyLunge--;
+  if (combat.intro > 0) combat.intro--;
+  if (combat.flash && --combat.flash.t <= 0) combat.flash = null;
+  if (combat.fini) return;
+  if (combat.tour === "ennemi"){
+    if (combat.anim > 0) combat.anim--;
+    else tourEnnemi();
+    return;
+  }
+  const nOpts = 4;
+  if (pressed("arrowup","z","w")) combat.cursor = (combat.cursor+nOpts-1)%nOpts;
+  if (pressed("arrowdown","s")) combat.cursor = (combat.cursor+1)%nOpts;
+  if (pressed("1")) combat.cursor = 0;
+  if (pressed("2")) combat.cursor = 1;
+  if (pressed("3")) combat.cursor = 2;
+  if (pressed("4")) combat.cursor = 3;
+  if (pressed("e","enter"," ","1","2","3","4")){
+    if (combat.cursor===0) attaqueBase();
+    else if (combat.cursor===1) utiliserCapacite();
+    else if (combat.cursor===2) boirePotion();
+    else tenterFuite();
+  }
+}
+function updateShop(){
+  const items = shop.data.items;
+  if (pressed("arrowup","z","w")) shop.cursor = (shop.cursor+items.length-1)%items.length;
+  if (pressed("arrowdown","s")) shop.cursor = (shop.cursor+1)%items.length;
+  for (let i=1;i<=items.length;i++){
+    if (pressed(String(i))){ shop.cursor = i-1; acheter(items[i-1]); return; }
+  }
+  if (pressed("e","enter"," ")) acheter(items[shop.cursor]);
+  if (pressed("escape","x")) state = S.MAP;
+}
+function updateSelect(){
+  if (pressed("arrowleft","q")) selCursor = (selCursor+2)%3;
+  if (pressed("arrowright","d")) selCursor = (selCursor+1)%3;
+  if (pressed("e","enter"," ")){
+    newGame(CLASSES[selCursor]);
+    showMessage(["Bienvenue, " + player.classe.nom + ".",
+      "Le donjon au nord regorge d'or et de gloire.",
+      "L'apothicaire et le forgeron vous équiperont."], function(){ state = S.MAP; }, "map");
+  }
+}
+function updateEvolve(){
+  const evos = EVOLUTIONS[player.classe.id];
+  if (pressed("arrowleft","q")) evoCursor = (evoCursor+2)%3;
+  if (pressed("arrowright","d")) evoCursor = (evoCursor+1)%3;
+  if (pressed("e","enter"," ")) appliquerEvolution(evos[evoCursor]);
+}
+
+/* ================================ RENDU : HUD ============================= */
+function drawHUD(){
+  ctx.fillStyle = "rgba(7,9,14,0.82)";
+  ctx.fillRect(0,0,W,42);
+  ctx.fillStyle = "rgba(216,180,90,0.45)"; ctx.fillRect(0,41,W,1);
+  // emblème de classe
+  const cc = couleurClasse();
+  const eg = ctx.createRadialGradient(24,21,2,24,21,15);
+  eg.addColorStop(0, cc); eg.addColorStop(1, shade(cc,0.4));
+  ctx.fillStyle = eg; ctx.beginPath(); ctx.arc(24,21,13,0,6.3); ctx.fill();
+  ctx.strokeStyle = "rgba(216,180,90,0.7)"; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(24,21,13,0,6.3); ctx.stroke();
+  txt(String(player.niveau), 24, 26, 14, "#fff", "center", "bold 14px Georgia");
+  txt(nomClasse(), 44, 17, 12, "#e8d29a", "left", "bold 12px Georgia");
+  txt("Niveau " + player.niveau, 44, 32, 10, "#8a93a6");
+  // barres
+  txt("PV", 148, 16, 10, "#c8cad2");
+  barre(168, 7, 130, 10, player.pv/player.pvMax, "#e05a6a", "#8f2334");
+  txt(player.pv + "/" + player.pvMax, 233, 16, 9, "#fff", "center", "bold 9px Arial", true);
+  txt("ÉN", 148, 33, 10, "#c8cad2");
+  barre(168, 24, 130, 10, player.energie/energieMax(), "#5a9ae0", "#2c5f8f");
+  txt(Math.round(player.energie) + "/" + energieMax(), 233, 33, 9, "#fff", "center", "bold 9px Arial", true);
+  txt("XP", 312, 16, 10, "#c8cad2");
+  barre(330, 7, 90, 10, player.xp/player.xpMax, "#d8b45a", "#9a7a2c");
+  txt("Potions ×" + player.potions, 312, 33, 10, "#c07ae0");
+  // stats & effets spéciaux
+  txt("FOR " + player.force, 445, 16, 11, "#e88a8a", "left", "bold 11px Georgia");
+  txt("→ armure " + armureTotale() + " · dégâts " + degatsAttaque(), 500, 16, 10, "#9aa0ac");
+  txt("VIT " + player.vitesse, 445, 33, 11, "#8ae8b0", "left", "bold 11px Georgia");
+  txt("→ esquive " + esquivePct() + "% · ×2 " + doubleChance() + "%", 500, 33, 10, "#9aa0ac");
+  txt("ESP " + player.esprit, 650, 16, 11, "#a08ae8", "left", "bold 11px Georgia");
+  txt("→ magie & énergie", 650, 33, 10, "#9aa0ac");
+  // or
+  ctx.fillStyle = "#e8c05a"; ctx.beginPath(); ctx.arc(W-72,15,6,0,6.3); ctx.fill();
+  ctx.fillStyle = "#a8842c"; ctx.beginPath(); ctx.arc(W-72,15,6,0,6.3); ctx.stroke();
+  txt(String(player.or), W-60, 20, 13, "#e8c05a", "left", "bold 13px Georgia");
+}
+
+/* ============================== RENDU : CARTE ============================= */
+function drawMapScene(){
+  ctx.drawImage(groundCv, 0, 0);
+  // reflets animés de l'étang
+  ctx.strokeStyle = "rgba(200,230,255,0.25)"; ctx.lineWidth = 1.4;
+  for (let i=0;i<4;i++){
+    const ph = time/900 + i*1.7;
+    const rx = 20 + ((Math.sin(ph)+1)/2)*46;
+    ctx.globalAlpha = 0.5 - rx/130;
+    ctx.beginPath(); ctx.ellipse(646, 502, rx, rx*0.5, 0, 0, 6.3); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  for (const b of buildings) drawBuilding(b);
+  drawVendor(668, 322, "apoth");
+  drawVendor(172, 306, "forge");
+  drawHero(player.x, player.y, player.dir, player.moving, player.animTime, 2.2,
+    player.classe ? player.classe.id : "guerrier",
+    player.evolution ? player.evolution.couleur : null);
+  // ombres de nuages
+  ctx.fillStyle = "rgba(8,18,8,0.10)";
+  for (const c of clouds){
+    c.x += c.v; if (c.x - c.rx > W) c.x = -c.rx;
+    ctx.beginPath(); ctx.ellipse(c.x, c.y, c.rx, c.ry, 0, 0, 6.3); ctx.fill();
+  }
+  drawParts(); drawFloats();
+  // invite de porte
+  const b = nearDoor();
+  if (b && state === S.MAP){
+    const lbl = b.id==="donjon" ? "E — Franchir la porte du donjon"
+      : b.id==="apothicaire" ? "E — Voir les potions de l'apothicaire"
+      : "E — Voir les armes du forgeron";
+    ctx.font = "bold 11px Georgia, serif";
+    const tw = ctx.measureText(lbl).width + 20;
+    const bx = Math.max(tw/2+6, Math.min(W-tw/2-6, player.x));
+    const by = player.y - 52;
+    rrFill(bx-tw/2, by-14, tw, 20, 6, "rgba(8,10,16,0.9)");
+    rrStroke(bx-tw/2, by-14, tw, 20, 6, "rgba(216,180,90,0.6)", 1);
+    ctx.beginPath(); ctx.moveTo(bx-4,by+6); ctx.lineTo(bx+4,by+6); ctx.lineTo(bx,by+11);
+    ctx.closePath(); ctx.fillStyle = "rgba(8,10,16,0.9)"; ctx.fill();
+    txt(lbl, bx, by, 11, "#e8d29a", "center", "bold 11px Georgia");
+  }
+  // lumière chaude + vignette
+  ctx.fillStyle = "rgba(255,214,150,0.05)"; ctx.fillRect(0,0,W,H);
+  ctx.drawImage(vinCv, 0, 0);
   drawHUD();
 }
 
-/* ---------------------------------------------------------------------------
-   DESSIN : HUD (barre de stats en haut)
---------------------------------------------------------------------------- */
-function drawHUD(){
-  // panneau
-  px(0, 0, W, 22, "rgba(8,10,16,0.82)");
-  ctx.textAlign = "left";
-  ctx.font = "11px 'Courier New'";
-  // PV
-  ctx.fillStyle = "#e8e8ec";
-  ctx.fillText("PV", 8, 15);
-  drawBar(28, 6, 80, 11, player.pv/player.pvMax, "#b8324a", "#3a1520");
-  ctx.fillStyle = "#e8e8ec";
-  ctx.fillText(player.pv + "/" + player.pvMax, 32, 15);
-  // XP
-  ctx.fillText("XP", 118, 15);
-  drawBar(138, 6, 60, 11, player.xp/player.xpMax, "#4a8fb8", "#152a3a");
-  // Niveau, or
-  ctx.fillStyle = "#d8b45a";
-  ctx.fillText("Niv " + player.niveau, 210, 15);
-  ctx.fillText("♦ " + player.or + " or", 270, 15);
-  // Stats + effets spéciaux
-  ctx.fillStyle = "#e88a8a";
-  ctx.fillText("FOR " + player.force + " (Armure " + armureTotale() + ")", 350, 15);
-  ctx.fillStyle = "#8ae8b0";
-  ctx.fillText("VIT " + player.vitesse + " (Esq. " + esquivePct() + "%)", 520, 15);
-}
-function drawBar(x, y, w, h, ratio, fill, back){
-  ratio = Math.max(0, Math.min(1, ratio));
-  px(x, y, w, h, back);
-  px(x, y, Math.round(w*ratio), h, fill);
-  ctx.strokeStyle = "rgba(0,0,0,0.6)";
-  ctx.strokeRect(x+0.5, y+0.5, w, h);
-}
-
-/* ---------------------------------------------------------------------------
-   DESSIN : COMBAT
---------------------------------------------------------------------------- */
-function drawCombat(){
-  // arrière-plan sombre du donjon
-  for (let y=0;y<H;y+=32) for (let x=0;x<W;x+=32){
-    px(x,y,32,32, ((x+y)/32)%2===0 ? "#171a22" : "#14161d");
+/* ============================= RENDU : COMBAT ============================= */
+function drawCombatScene(){
+  // murs du donjon
+  ctx.fillStyle = linGrad(0,0,0,390,[[0,"#262a36"],[1,"#14161e"]]); ctx.fillRect(0,0,W,390);
+  // arches en retrait
+  for (const ax of [130, 400, 670]){
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.beginPath(); ctx.roundRect(ax-56, 80, 112, 260, [56,56,0,0]); ctx.fill();
+    ctx.strokeStyle = "rgba(90,96,116,0.5)"; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.roundRect(ax-56, 80, 112, 260, [56,56,0,0]); ctx.stroke();
   }
-  // torches
-  drawTorch(60, 120); drawTorch(W-60, 120);
-  // sol
-  px(0, 320, W, 160, "#1f1620");
-  px(0, 316, W, 4, "#33202e");
+  // piliers
+  for (const px2 of [255, 545]){
+    ctx.fillStyle = linGrad(px2-24,0,px2+24,0,[[0,"#3c4150"],[0.5,"#2c3040"],[1,"#20232e"]]);
+    ctx.fillRect(px2-24, 60, 48, 330);
+    ctx.fillStyle = "#454b5c"; ctx.fillRect(px2-30, 52, 60, 12); ctx.fillRect(px2-30, 382, 60, 10);
+  }
+  drawTorch(255, 170, 1.3); drawTorch(545, 170, 1.3);
+  // sol en perspective
+  ctx.fillStyle = linGrad(0,390,0,H,[[0,"#3d3240"],[1,"#221a26"]]); ctx.fillRect(0,390,W,H-390);
+  ctx.strokeStyle = "rgba(0,0,0,0.3)"; ctx.lineWidth = 1;
+  for (let i=0;i<5;i++){
+    const yy = 396 + i*i*8;
+    ctx.beginPath(); ctx.moveTo(0,yy); ctx.lineTo(W,yy); ctx.stroke();
+  }
+  for (let i=-3;i<=11;i++){
+    ctx.beginPath(); ctx.moveTo(400+(i-4)*44, 390); ctx.lineTo(400+(i-4)*130, H); ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(255,170,70,0.05)"; ctx.fillRect(0,340,W,60);
 
   const e = combat.ennemi;
-  // ennemi
-  drawEnemy(W/2, 210, e.couleur, e.hitFlash, 2.2);
-  // héros (dos tourné vers l'ennemi -> on le montre de dos, en bas)
-  const shake = combat.playerFlash>0 ? (Math.random()*4-2) : 0;
-  drawHero(180 + shake, 360, "up", false, 0, 1.7);
-
-  // barre de vie ennemi
-  ctx.textAlign = "center";
-  ctx.font = "13px 'Courier New'";
-  ctx.fillStyle = "#e8e8ec";
-  ctx.fillText(e.nom, W/2, 90);
-  drawBar(W/2-90, 98, 180, 12, e.pv/e.pvMax, "#b8324a", "#3a1520");
-  ctx.fillStyle="#ccc"; ctx.font="10px 'Courier New'";
-  ctx.fillText(e.pv + " / " + e.pvMax + "   (esquive " + e.esquive + "%)", W/2, 124);
-
-  // panneau bas : journal + menu
-  drawCombatPanel();
-  drawHUD();
-}
-
-function drawTorch(x, y){
-  px(x-2, y, 4, 20, "#3a2a1a");
-  const flick = Math.sin(Date.now()/120 + x)*2;
-  ctx.fillStyle = "#e8a23a";
-  ctx.beginPath(); ctx.ellipse(x, y-4+flick, 5, 9, 0, 0, Math.PI*2); ctx.fill();
-  ctx.fillStyle = "#f4d878";
-  ctx.beginPath(); ctx.ellipse(x, y-2+flick, 2.5, 5, 0, 0, Math.PI*2); ctx.fill();
-  // halo
-  const g = ctx.createRadialGradient(x,y,2,x,y,60);
-  g.addColorStop(0,"rgba(232,162,58,0.18)");
-  g.addColorStop(1,"rgba(232,162,58,0)");
-  ctx.fillStyle=g; ctx.fillRect(x-60,y-60,120,120);
-}
-
-function drawCombatPanel(){
-  const py = 396;
-  px(8, py, W-16, H-py-8, "rgba(8,10,16,0.9)");
-  ctx.strokeStyle = "#3a4257"; ctx.strokeRect(8.5, py+0.5, W-16, H-py-8);
-  // journal (à gauche)
-  ctx.textAlign = "left";
-  ctx.font = "11px 'Courier New'";
-  ctx.fillStyle = "#c8cad2";
-  for (let i=0;i<combatLog.length;i++){
-    ctx.fillText(combatLog[i], 18, py+18 + i*15);
+  // aura d'évolution du héros
+  if (player.evolution){
+    ctx.globalAlpha = 0.16 + 0.05*Math.sin(time/300);
+    ctx.fillStyle = player.evolution.couleur;
+    ctx.beginPath(); ctx.ellipse(HX, HY, 44, 15, 0, 0, 6.3); ctx.fill();
+    ctx.globalAlpha = 1;
   }
-  // menu (à droite) — seulement au tour du joueur
+  // combattants
+  const hl = combat.heroLunge > 0 ? Math.sin(combat.heroLunge/12*Math.PI)*26 : 0;
+  const el = combat.enemyLunge > 0 ? Math.sin(combat.enemyLunge/12*Math.PI)*30 : 0;
+  const hs = combat.playerFlash > 0 ? (Math.random()*5-2.5) : 0;
+  drawHero(HX+hl+hs, HY, "right", false, time, 3.4, player.classe.id,
+    player.evolution ? player.evolution.couleur : null);
+  if (!(combat.fini && e.pv <= 0)) drawEnemy(EX-el, EY, e, true);
+  if (combat.voile > 0){
+    ctx.globalAlpha = 0.5;
+    drawHero(HX-14, HY+4, "right", false, time+400, 3.4, player.classe.id, "#8f7ae8");
+    ctx.globalAlpha = 1;
+  }
+  // bandeau ennemi
+  panel(W/2-160, 54, 320, 62);
+  txt(e.nom, W/2, 76, 15, "#f0e6d0", "center", "bold 15px Georgia");
+  barre(W/2-130, 84, 260, 12, e.pv/e.pvMax, "#e05a6a", "#8f2334");
+  txt(e.pv + " / " + e.pvMax + "   ·   esquive " + e.esquive + "%" + (e.crit?"   ·   crit "+e.crit+"%":""),
+    W/2, 110, 10, "#9aa0ac", "center");
+  // effets actifs
+  let ey2 = 128;
+  if (combat.poison && combat.poison.tours > 0){
+    txt("☠ Poison : " + combat.poison.dgt + " dgt (" + combat.poison.tours + " tours)", W/2, ey2, 11, "#7ae86a", "center");
+    ey2 += 16;
+  }
+  if (combat.buff){
+    txt("✦ Aura : +"+combat.buff.force+" FOR · +"+combat.buff.armure+" armure ("+combat.buff.tours+" t.)",
+      W/2, ey2, 11, "#e8c05a", "center");
+  }
+  drawParts(); drawFloats();
+  // flash de capacité
+  if (combat.flash){
+    ctx.globalAlpha = combat.flash.t/13*0.22;
+    ctx.fillStyle = combat.flash.col; ctx.fillRect(0,0,W,H);
+    ctx.globalAlpha = 1;
+  }
+  // panneau d'actions
+  const py = 452;
+  panel(10, py, W-20, H-py-10);
+  ctx.textAlign = "left";
+  for (let i=0;i<combatLog.length;i++){
+    txt(combatLog[i], 28, py+26+i*17, 11.5, i===combatLog.length-1 ? "#f0e6d0" : "#8a93a6");
+  }
   if (combat.tour==="joueur" && !combat.fini){
-    const options = ["Attaquer", "Potion (" + player.potions + ")", "Fuir"];
-    const mx = W-190;
-    px(mx-8, py+6, 180, 66, "rgba(20,24,34,0.9)");
-    for (let i=0;i<options.length;i++){
+    const cap = capaciteActuelle();
+    const opts = [
+      ["Attaquer", "dégâts " + degatsAttaque() + " · double " + doubleChance() + "%"],
+      [cap.nom, cap.cout + " én. · " + (player.energie>=cap.cout ? "prête" : "énergie insuffisante")],
+      ["Potion ("+player.potions+")", "+30 PV"],
+      ["Fuir", (30+player.vitesse*4) + "% de chances"],
+    ];
+    const mx = 470;
+    for (let i=0;i<4;i++){
       const sel = i===combat.cursor;
-      ctx.fillStyle = sel ? "#d8b45a" : "#9aa0ac";
-      ctx.fillText((sel?"▶ ":"  ") + (i+1) + ". " + options[i], mx, py+22 + i*18);
+      const oy = py+14+i*30;
+      if (sel) rrFill(mx-10, oy-2, 320, 27, 5, "rgba(216,180,90,0.13)");
+      txt((sel?"▶ ":"   ") + (i+1) + ". " + opts[i][0], mx, oy+12, 13,
+        sel ? "#f0d888" : "#b8bcc8", "left", (sel?"bold ":"")+"13px Georgia");
+      txt(opts[i][1], mx+18, oy+24, 9.5, i===1 && player.energie<cap.cout ? "#c86a6a" : "#7a8394");
     }
   } else if (!combat.fini){
-    ctx.fillStyle = "#8a93a6";
-    ctx.fillText("...", W-180, py+40);
+    txt("L'ennemi prépare son attaque...", 470, py+46, 12, "#8a93a6");
   }
-}
-
-/* ---------------------------------------------------------------------------
-   DESSIN : BOUTIQUE
---------------------------------------------------------------------------- */
-function drawShop(){
-  // fond intérieur
-  for (let y=0;y<H;y+=32) for (let x=0;x<W;x+=32){
-    px(x,y,32,32, ((x+y)/32)%2===0 ? "#241d15" : "#201a12");
-  }
-  px(0, 300, W, 180, "#2a2016");
-  // panneau
-  const pw = 460, ph = 300, px0 = (W-pw)/2, py0 = 60;
-  px(px0, py0, pw, ph, "rgba(12,14,20,0.94)");
-  ctx.strokeStyle = "#d8b45a"; ctx.lineWidth=2;
-  ctx.strokeRect(px0+0.5, py0+0.5, pw, ph);
-  ctx.lineWidth=1;
-
-  ctx.textAlign="center";
-  ctx.fillStyle="#d8b45a"; ctx.font="18px 'Courier New'";
-  ctx.fillText(shop.data.titre, W/2, py0+28);
-  ctx.font="11px 'Courier New'";
-  ctx.fillStyle="#9aa0ac";
-  ctx.fillText("Votre or : " + player.or + "   ·   ↑↓ choisir · E acheter · X sortir", W/2, py0+46);
-
-  // vendeur dessiné
-  drawVendor(px0+40, py0+90, shop.data===potionShop?"#6fae6f":"#c98a4a");
-
-  // items
-  ctx.textAlign="left";
-  const items = shop.data.items;
-  for (let i=0;i<items.length;i++){
-    const it = items[i];
-    const iy = py0+72 + i*46;
-    const sel = i===shop.cursor;
-    px(px0+80, iy, pw-100, 40, sel ? "rgba(216,180,90,0.14)" : "rgba(255,255,255,0.03)");
-    if (sel){ ctx.strokeStyle="#d8b45a"; ctx.strokeRect(px0+80.5, iy+0.5, pw-100, 40); }
-    const affordable = player.or >= it.prix;
-    ctx.fillStyle = sel ? "#ffffff" : "#d0d3da";
-    ctx.font="13px 'Courier New'";
-    ctx.fillText((sel?"▶ ":"  ") + it.nom, px0+92, iy+17);
-    ctx.fillStyle = "#8a93a6";
-    ctx.font="10px 'Courier New'";
-    ctx.fillText(it.desc, px0+108, iy+32);
-    ctx.textAlign="right";
-    ctx.fillStyle = affordable ? "#d8b45a" : "#7a4a4a";
-    ctx.font="13px 'Courier New'";
-    ctx.fillText(it.prix + " ♦", px0+pw-16, iy+24);
-    ctx.textAlign="left";
-  }
-
-  // flash message
-  if (flashTimer>0){
-    ctx.textAlign="center";
-    ctx.fillStyle = flashShop.startsWith("Pas") ? "#e88a8a" : "#8ae8b0";
-    ctx.font="13px 'Courier New'";
-    ctx.fillText(flashShop, W/2, py0+ph-14);
-    flashTimer--;
-  }
+  ctx.drawImage(vinCv, 0, 0);
   drawHUD();
 }
 
-/* ---------------------------------------------------------------------------
-   DESSIN : MESSAGE & GAME OVER
---------------------------------------------------------------------------- */
-function drawMessage(){
-  drawMap();
-  px(0,0,W,H,"rgba(6,8,12,0.6)");
-  const bw=460, bh=40+msg.lignes.length*22, bx=(W-bw)/2, by=(H-bh)/2;
-  px(bx,by,bw,bh,"rgba(12,14,20,0.96)");
-  ctx.strokeStyle="#d8b45a"; ctx.lineWidth=2; ctx.strokeRect(bx+0.5,by+0.5,bw,bh); ctx.lineWidth=1;
-  ctx.textAlign="center"; ctx.font="13px 'Courier New'";
-  for (let i=0;i<msg.lignes.length;i++){
-    ctx.fillStyle = i===0 ? "#d8b45a" : "#d0d3da";
-    ctx.fillText(msg.lignes[i], W/2, by+26+i*22);
+/* ============================ RENDU : BOUTIQUE ============================ */
+function drawShopScene(){
+  drawMapScene();
+  ctx.fillStyle = "rgba(5,7,11,0.72)"; ctx.fillRect(0,0,W,H);
+  const items = shop.data.items;
+  const ph = 108 + items.length*46 + 26;
+  const pw = 540, px0 = (W-pw)/2, py0 = (H-ph)/2 + 8;
+  panel(px0, py0, pw, ph);
+  drawVendor(px0+46, py0+74, shop.data.vendeur);
+  txt(shop.data.titre, W/2+20, py0+34, 21, "#e8c05a", "center", "bold 21px Georgia");
+  txt(shop.data.accueil, W/2+20, py0+56, 11, "#9aa0ac", "center", "italic 11px Georgia");
+  txt("Votre or : " + player.or + " ♦   ·   ↑↓ choisir · E acheter · X sortir",
+    W/2, py0+80, 11, "#c8cad2", "center");
+  for (let i=0;i<items.length;i++){
+    const it = items[i], sel = i===shop.cursor;
+    const iy = py0+94+i*46;
+    rrFill(px0+18, iy, pw-36, 40, 6, sel ? "rgba(216,180,90,0.13)" : "rgba(255,255,255,0.03)");
+    if (sel) rrStroke(px0+18, iy, pw-36, 40, 6, "rgba(216,180,90,0.8)", 1.4);
+    // icône
+    const ic = px0+40, icy = iy+20;
+    if (it.type==="potion" || it.type==="pvmax"){
+      ctx.fillStyle = it.type==="potion" ? "#e05a6a" : "#e88aa0";
+      ctx.beginPath(); ctx.arc(ic, icy+3, 6, 0, 6.3); ctx.fill();
+      ctx.fillStyle = "#c8cad2"; ctx.fillRect(ic-2, icy-8, 4, 6);
+    } else if (it.type==="arme"){
+      ctx.save(); ctx.translate(ic,icy); ctx.rotate(-0.75);
+      ctx.fillStyle = "#d5dbe6"; ctx.fillRect(-1.5,-10,3,15);
+      ctx.fillStyle = "#d8b45a"; ctx.fillRect(-4.5,3,9,2.4);
+      ctx.restore();
+    } else if (it.type==="armure"){
+      ctx.fillStyle = "#8a93a3";
+      ctx.beginPath(); ctx.moveTo(ic-7,icy-7); ctx.lineTo(ic+7,icy-7); ctx.lineTo(ic+7,icy+2);
+      ctx.quadraticCurveTo(ic+7,icy+8,ic,icy+10); ctx.quadraticCurveTo(ic-7,icy+8,ic-7,icy+2);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "#d8b45a"; ctx.beginPath(); ctx.arc(ic,icy,2.4,0,6.3); ctx.fill();
+    } else {
+      const cc2 = it.type==="force" ? "#e88a8a" : it.type==="vitesse" ? "#8ae8b0" : "#a08ae8";
+      ctx.fillStyle = cc2;
+      ctx.beginPath(); ctx.moveTo(ic,icy-9); ctx.lineTo(ic+6,icy); ctx.lineTo(ic,icy+9); ctx.lineTo(ic-6,icy);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.5)";
+      ctx.beginPath(); ctx.moveTo(ic,icy-6); ctx.lineTo(ic+3,icy-1.5); ctx.lineTo(ic,icy-3); ctx.closePath(); ctx.fill();
+    }
+    txt(it.nom, px0+62, iy+17, 13, sel ? "#fff" : "#d0d3da", "left", (sel?"bold ":"")+"13px Georgia");
+    txt(it.desc, px0+62, iy+32, 10, "#8a93a6");
+    const afford = player.or >= it.prix;
+    txt(it.prix + " ♦", px0+pw-32, iy+25, 14, afford ? "#e8c05a" : "#8f4a4a", "right", "bold 14px Georgia");
   }
-  ctx.fillStyle="#8a93a6"; ctx.font="10px 'Courier New'";
-  ctx.fillText("[ E / Entrée pour continuer ]", W/2, by+bh-8);
+  if (flashTimer > 0){
+    flashTimer--;
+    txt(flashShop, W/2, py0+ph-10, 12,
+      flashShop.indexOf("Pas")===0 ? "#e88a8a" : "#8ae8b0", "center", "bold 12px Georgia");
+  }
 }
 
-function drawGameOver(){
-  px(0,0,W,H,"#0a0608");
-  ctx.textAlign="center";
-  ctx.fillStyle="#b8324a"; ctx.font="34px 'Courier New'";
-  ctx.fillText("VOUS ÊTES TOMBÉ", W/2, H/2-30);
-  ctx.fillStyle="#c8cad2"; ctx.font="13px 'Courier New'";
-  ctx.fillText("Le guerrier de l'ombre s'éteint... Niveau atteint : " + player.niveau, W/2, H/2+6);
-  ctx.fillStyle="#d8b45a"; ctx.font="14px 'Courier New'";
-  ctx.fillText("[ E / Entrée pour renaître ]", W/2, H/2+44);
+/* ===================== RENDU : ÉCRANS DE CLASSE / ÉVOLUTION =============== */
+function drawCardScreen(titre, sousTitre, cards, cursor, footer){
+  ctx.fillStyle = linGrad(0,0,0,H,[[0,"#141826"],[1,"#07080d"]]); ctx.fillRect(0,0,W,H);
+  if (Math.random() < 0.3) parts.push({x:Math.random()*W, y:H+6, vx:(Math.random()-0.5)*0.2,
+    vy:-0.35-Math.random()*0.5, life:150, max:150, color:"rgba(216,170,80,0.5)", size:1.8, grav:0});
+  drawParts();
+  ctx.save();
+  ctx.shadowColor = "#d8b45a"; ctx.shadowBlur = 26;
+  txt(titre, W/2, 52, 30, "#e8c05a", "center", "bold 30px Georgia");
+  ctx.restore();
+  txt(sousTitre, W/2, 78, 13, "#8a93a6", "center", "italic 13px Georgia");
+  for (let i=0;i<cards.length;i++){
+    const c = cards[i], sel = i===cursor;
+    const cx = 34 + i*250, cy = sel ? 96 : 104, cw = 232, ch = 424;
+    if (sel){
+      ctx.save(); ctx.shadowColor = c.couleur; ctx.shadowBlur = 30;
+      rrFill(cx, cy, cw, ch, 12, "rgba(20,23,34,0.98)");
+      ctx.restore();
+      rrStroke(cx+1.5, cy+1.5, cw-3, ch-3, 11, c.couleur, 2.2);
+    } else {
+      rrFill(cx, cy, cw, ch, 12, "rgba(15,17,25,0.94)");
+      rrStroke(cx+1.5, cy+1.5, cw-3, ch-3, 11, "rgba(120,128,148,0.4)", 1.2);
+    }
+    txt(c.nom, cx+cw/2, cy+30, 17, sel ? c.couleur : "#c8cad2", "center", "bold 17px Georgia");
+    txt(c.titre, cx+cw/2, cy+48, 11, "#8a93a6", "center", "italic 11px Georgia");
+    // portrait
+    const pg = ctx.createRadialGradient(cx+cw/2, cy+118, 4, cx+cw/2, cy+118, 52);
+    pg.addColorStop(0, "rgba(255,255,255,0.06)"); pg.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = pg; ctx.fillRect(cx+20, cy+58, cw-40, 110);
+    drawHero(cx+cw/2, cy+158, "down", true, time, 3.1, c.clsId, c.evoCol);
+    // stats
+    let sy = cy+192;
+    for (const st of c.statLines){
+      txt(st[0], cx+18, sy, 11, st[2]||"#c8cad2", "left", "bold 11px Georgia");
+      if (st[1] !== null) barre(cx+92, sy-9, 118, 8, st[1], st[2]||"#c8cad2", shade(st[2]||"#888888",0.5));
+      else txt(st[3], cx+92, sy, 11, "#e8d29a");
+      sy += 20;
+    }
+    // capacité
+    rrFill(cx+14, sy-4, cw-28, 74, 6, "rgba(216,180,90,0.07)");
+    rrStroke(cx+14, sy-4, cw-28, 74, 6, "rgba(216,180,90,0.3)", 1);
+    txt("✦ " + c.capacite.nom + "  (" + c.capacite.cout + " én.)", cx+24, sy+14, 11.5, "#e8c05a", "left", "bold 11.5px Georgia");
+    wrapTxt(c.capacite.desc, cx+24, sy+31, cw-48, 14, 10.5, "#b8bcc8");
+    wrapTxt(c.desc, cx+cw/2, sy+92, cw-36, 14, 10.5, "#8a93a6", "center");
+  }
+  txt(footer, W/2, H-38, 12, "#c8cad2", "center");
+  txt("FORCE → armure & dégâts   ·   VITESSE → esquive, double frappe & fuite   ·   ESPRIT → magie & énergie",
+    W/2, H-16, 11, "#7a8394", "center");
+  ctx.drawImage(vinCv, 0, 0);
+}
+function drawSelectScene(){
+  const cards = CLASSES.map(function(c){
+    return { nom:c.nom, titre:c.titre, couleur:c.couleur, clsId:c.id, evoCol:null,
+      capacite:c.capacite, desc:c.desc,
+      statLines:[
+        ["PV " + c.stats.pv, c.stats.pv/70, "#e05a6a"],
+        ["FOR " + c.stats.force, c.stats.force/12, "#e88a8a"],
+        ["VIT " + c.stats.vitesse, c.stats.vitesse/12, "#8ae8b0"],
+        ["ESP " + c.stats.esprit, c.stats.esprit/12, "#a08ae8"],
+      ] };
+  });
+  drawCardScreen("SHADOW OF THE WARRIOR", "Choisissez votre voie, guerrier de l'ombre",
+    cards, selCursor, "← → choisir   ·   E commencer l'aventure");
+}
+function drawEvolveScene(){
+  const evos = EVOLUTIONS[player.classe.id];
+  const cards = evos.map(function(ev){
+    return { nom:ev.nom, titre:"Évolution de " + player.classe.nom, couleur:ev.couleur,
+      clsId:player.classe.id, evoCol:ev.couleur, capacite:ev.capacite, desc:ev.desc,
+      statLines:[
+        ["PV", null, "#e05a6a", "+" + ev.bonus.pv],
+        ["FOR", null, "#e88a8a", "+" + ev.bonus.force],
+        ["VIT", null, "#8ae8b0", "+" + ev.bonus.vitesse],
+        ["ESP", null, "#a08ae8", "+" + ev.bonus.esprit],
+      ] };
+  });
+  drawCardScreen("L'ÉVEIL", "Niveau 5 atteint — votre âme réclame une nouvelle forme",
+    cards, evoCursor, "← → choisir   ·   E embrasser votre destinée");
 }
 
+/* ========================= RENDU : MESSAGE / GAMEOVER ===================== */
+function drawMsgScene(){
+  if (msg.fond === "combat" && combat) drawCombatScene(); else drawMapScene();
+  ctx.fillStyle = "rgba(4,6,10,0.62)"; ctx.fillRect(0,0,W,H);
+  const bw = 500, bh = 58 + msg.lignes.length*24;
+  const bx = (W-bw)/2, by = (H-bh)/2;
+  panel(bx, by, bw, bh);
+  for (let i=0;i<msg.lignes.length;i++){
+    const l = msg.lignes[i];
+    const star = l.indexOf("★")===0;
+    txt(l, W/2, by+32+i*24, i===0?16:13, i===0 ? "#e8c05a" : star ? "#ffd34a" : "#d0d3da",
+      "center", (i===0||star ? "bold " : "") + (i===0?16:13) + "px Georgia");
+  }
+  txt("E / Entrée pour continuer", W/2, by+bh-13, 10, "#7a8394", "center", "italic 10px Georgia");
+}
+function drawGameOverScene(){
+  ctx.fillStyle = linGrad(0,0,0,H,[[0,"#1a0a0e"],[1,"#060305"]]); ctx.fillRect(0,0,W,H);
+  if (Math.random()<0.25) parts.push({x:Math.random()*W, y:-6, vx:0, vy:0.5+Math.random(),
+    life:130, max:130, color:"rgba(180,40,60,0.4)", size:2, grav:0.002});
+  drawParts();
+  ctx.save(); ctx.shadowColor = "#b8324a"; ctx.shadowBlur = 34;
+  txt("VOUS ÊTES TOMBÉ", W/2, H/2-46, 40, "#b8324a", "center", "bold 40px Georgia");
+  ctx.restore();
+  txt(nomClasse() + " · niveau " + player.niveau + " — l'ombre se souviendra de vous.",
+    W/2, H/2-6, 14, "#c8cad2", "center");
+  txt("La moitié de votre or se perd dans les ténèbres...", W/2, H/2+20, 12, "#8a93a6", "center", "italic 12px Georgia");
+  txt("E / Entrée pour renaître", W/2, H/2+64, 15, "#e8c05a", "center", "bold 15px Georgia");
+  ctx.drawImage(vinCv, 0, 0);
+}
 function renaitre(){
   player.pv = player.pvMax;
-  player.or = Math.floor(player.or*0.5);
-  player.x = 320; player.y = 300;
-  state = STATE.MAP;
+  player.energie = energieMax();
+  player.or = Math.floor(player.or/2);
+  player.x = 400; player.y = 440; player.dir = "down";
+  state = S.MAP;
 }
 
-/* ---------------------------------------------------------------------------
-   BOUCLE PRINCIPALE
---------------------------------------------------------------------------- */
+/* ============================= BOUCLE PRINCIPALE ========================== */
 let last = performance.now();
 function loop(now){
-  const dt = Math.min(50, now - last); last = now;
-
+  const dt = Math.min(50, now-last); last = now; time = now;
+  ctx.save();
+  if (shake > 0){ shake--; ctx.translate((Math.random()-0.5)*shake, (Math.random()-0.5)*shake); }
   switch(state){
-    case STATE.MAP:      updateMap(dt);    drawMap();    break;
-    case STATE.COMBAT:   updateCombat(dt); drawCombat(); break;
-    case STATE.SHOP:     updateShop(dt);   drawShop();   break;
-    case STATE.MSG:
-      drawMessage();
-      if (pressed("e","enter"," ")){ const s=msg.suite; msg.suite=null; s(); }
+    case S.SELECT: updateSelect(); if (state===S.SELECT) drawSelectScene(); else drawMsgScene(); break;
+    case S.MAP: updateMap(dt); drawMapScene(); break;
+    case S.COMBAT: updateCombat(); if (combat) drawCombatScene(); else drawMapScene(); break;
+    case S.SHOP: updateShop(); if (state===S.SHOP) drawShopScene(); else drawMapScene(); break;
+    case S.EVOLVE: updateEvolve(); if (state===S.EVOLVE) drawEvolveScene(); else drawMsgScene(); break;
+    case S.MSG:
+      drawMsgScene();
+      if (pressed("e","enter"," ")){ const su = msg.suite; msg.suite = null; if (su) su(); }
       break;
-    case STATE.GAMEOVER:
-      drawGameOver();
+    case S.GAMEOVER:
+      drawGameOverScene();
       if (pressed("e","enter"," ")) renaitre();
       break;
   }
+  ctx.restore();
   clearJustPressed();
   requestAnimationFrame(loop);
 }
