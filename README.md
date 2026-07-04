@@ -1,53 +1,69 @@
 # Shadow of the Warrior
 
-Un jeu d'aventure et de combat au tour par tour, **entièrement dessiné au code**
-(canvas HTML5 : dégradés, lumières, particules, animations — aucune image ni
-bibliothèque externe).
+Un action-RPG au tour par tour à l'ambiance gothique. Le **combat est rendu en
+WebGL via PixiJS** (pénombre, halos de torche, ombres portées, brouillard,
+étalonnage sombre et **giclées de sang**) pour évoquer *Darkest Dungeon* ; la
+carte-hub et les menus sont rendus sur un canvas 2D. Tous les personnages sont
+**peints procéduralement** (couches d'ombrage, contour-lumière) — aucune image
+externe, tout est embarqué (PixiJS est vendorisé dans `libs/`), donc le jeu
+tourne hors-ligne.
 
 ## Trois façons de jouer
 
-1. **Dans le navigateur** (le plus simple) : ouvre `index.html` d'un double-clic.
+1. **Dans le navigateur** : ouvre `index.html` (sert `game.js` + `libs/`).
 2. **En application de bureau** : `npm install` puis `npm start` (Electron).
-3. **En vrai `.exe` Windows** : voir plus bas.
+3. **En application Windows** : voir plus bas.
 
 ## Comment jouer
 
-- **Choix de classe** au lancement : `← →` puis `E`
-- **Déplacement** : `Z Q S D` ou les **flèches**
-- **Interagir** (portes / marchands) : `E` ou `Entrée`
-- **En combat** : `1` Attaquer · `2` Capacité spéciale · `3` Potion · `4` Fuir
+- **Choix de classe** : `← →` puis `E`
+- **Déplacement sur la carte** : `Z Q S D` / flèches · **Interagir** : `E`
+- **En combat** : `1` Attaquer · `2` Capacité · `3` Potion · `4` Fuir (ou `↑↓ E`)
 - **En boutique** : `↑ ↓` choisir, `E` acheter, `X` sortir
 
-## La carte
+## Les Cinq Portails
 
-- **Donjon** (au nord) → franchir la porte pour **combattre** (or + XP).
-- **Forgeron** (en haut à l'ouest) → **armes** et **armures**.
-- **Apothicaire** (à l'est) → **potions** et élixirs de stats permanents.
+La carte-hub donne accès à **5 portails**, chacun de **10 étages** terminés par
+un **boss unique**. La difficulté augmente avec le portail, l'étage et votre
+niveau. Un portail se déverrouille en atteignant son niveau recommandé ou en
+purifiant le précédent.
 
-## Les classes (3 → 9 évolutions)
+| Portail | Niv. | Gardien (boss) |
+|---|---|---|
+| Les Catacombes | 1 | Le Croque-Os |
+| La Forêt Maudite | 6 | La Sylve Affamée |
+| Le Sanctuaire Brisé | 11 | L'Inquisiteur Déchu |
+| Les Abysses Gelés | 16 | Le Roi Gelé |
+| Le Trône de Cendres | 22 | Malphas, l'Embrasé |
 
-Chaque classe a ses **stats de base**, sa **capacité spéciale**, et évolue au
-**niveau 5** en l'une de **3 classes avancées** :
+Entre deux étages, un **feu de camp** permet de se soigner un peu et de
+continuer, ou de se replier au village (en gardant or et niveaux).
 
-| Classe | Profil | Capacité | Évolutions (niv. 5) |
+## Classes uniques (3 → 9 évolutions)
+
+Chaque classe a des **stats de base**, une **capacité active**, un **passif
+unique** et une apparence propre. Au **niveau 5**, elle évolue en l'une de
+**3 classes avancées** (bonus de stats + nouveau passif + nouvelle capacité).
+
+| Classe | Passif | Capacité | Évolutions |
 |---|---|---|---|
-| **Guerrier** | PV 60 · FOR 9 · VIT 3 · ESP 2 | Colère du Titan — 220% imparable | Berserker · Paladin · Seigneur de Guerre |
-| **Lame des Ombres** | PV 45 · FOR 5 · VIT 9 · ESP 3 | Danse des Ombres — 3 frappes à 80% | Maître des Ombres · Duelliste · Traqueur |
-| **Mage de Guerre** | PV 40 · FOR 3 · VIT 4 · ESP 10 | Boule de Feu — magie imparable | Archimage · Nécromancien · Sage |
-
-Chaque évolution apporte des bonus de stats **et une nouvelle capacité**
-(Rage Sanglante, Jugement Sacré, Étendard de Guerre, Voile d'Ombre, Estocade
-Fulgurante, Lame Empoisonnée, Météore, Drain de Vie, Bénédiction).
+| **Guerrier** | Peau de fer (−20% dégâts subis) | Colère du Titan | Berserker · Paladin · Seigneur de Guerre |
+| **Lame des Ombres** | Célérité (chance de rejouer) | Danse des Ombres | Maître des Ombres · Duelliste · Traqueur |
+| **Mage de Guerre** | Flux mystique (+énergie/tour) | Trait de Feu | Archimage · Nécromancien · Sage |
 
 ## Effets spéciaux des statistiques
 
 | Stat | Effets |
 |---|---|
-| **Force** | + armure (`FOR × 0.6`) et + dégâts (`FOR × 0.5`) |
-| **Vitesse** | + esquive (`VIT × 2.2 %`, max 70) · chance de **double frappe** (`VIT × 1.2 %`) · + fuite |
-| **Esprit** | + puissance des capacités magiques · + énergie max et régénération · petit soin après victoire |
+| **Force** | + armure (`FOR × 0.6`) et + dégâts (`FOR × 0.55`) |
+| **Vitesse** | + esquive (`VIT × 2.2 %`, max 72) · **double frappe** (`VIT × 1.2 %`) · + fuite |
+| **Esprit** | + puissance magique · + énergie max & régénération · soin après victoire |
 
-Les valeurs dérivées sont affichées en direct dans le HUD.
+## Marchands qui évoluent
+
+Le **forgeron** (armes/armures) et l'**apothicaire** (potions/élixirs)
+**enrichissent leur stock à mesure que le héros monte en niveau** : de
+nouveaux paliers d'équipement apparaissent, et les potions soignent davantage.
 
 ## Obtenir l'application Windows
 
@@ -57,7 +73,7 @@ auto-extractible, qui déclenche souvent une fausse alerte antivirus) :
 
 1. Onglet **Actions** du dépôt → dernier run **« Build Windows .exe »** vert.
 2. Télécharger l'artefact **`ShadowOfTheWarrior-Windows`**.
-3. Dézipper le dossier `ShadowOfTheWarrior-2.0.0-win64.zip`.
+3. Dézipper le dossier `ShadowOfTheWarrior-3.0.0-win64.zip`.
 4. Ouvrir le dossier et double-cliquer sur **`Shadow of the Warrior.exe`**
    (`F11` = plein écran).
 

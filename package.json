@@ -1,6 +1,6 @@
 {
   "name": "shadow-of-the-warrior",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Jeu d'aventure et de combat au tour par tour, dessiné au canvas.",
   "main": "main.js",
   "author": "Terence",
@@ -19,7 +19,9 @@
     "productName": "Shadow of the Warrior",
     "files": [
       "main.js",
-      "index.html"
+      "index.html",
+      "game.js",
+      "libs/**"
     ],
     "directories": {
       "output": "dist"
