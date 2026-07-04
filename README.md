@@ -49,13 +49,30 @@ Fulgurante, Lame Empoisonnée, Météore, Drain de Vie, Bénédiction).
 
 Les valeurs dérivées sont affichées en direct dans le HUD.
 
-## Obtenir l'exécutable `.exe` Windows
+## Obtenir l'application Windows
 
-Le `.exe` est compilé automatiquement par GitHub Actions à chaque push :
+L'application est compilée automatiquement par GitHub Actions à chaque push,
+sous forme d'un **`.zip` contenant l'application décompressée** (et non un exe
+auto-extractible, qui déclenche souvent une fausse alerte antivirus) :
 
 1. Onglet **Actions** du dépôt → dernier run **« Build Windows .exe »** vert.
 2. Télécharger l'artefact **`ShadowOfTheWarrior-Windows`**.
-3. Dézipper → **`ShadowOfTheWarrior-2.0.0-portable.exe`** (double-clic, aucune installation, `F11` plein écran).
+3. Dézipper le dossier `ShadowOfTheWarrior-2.0.0-win64.zip`.
+4. Ouvrir le dossier et double-cliquer sur **`Shadow of the Warrior.exe`**
+   (`F11` = plein écran).
 
 Ou compiler soi-même sous Windows : `npm install && npm run dist:win`.
-Pousser un tag `v2.0.0` publie aussi le `.exe` dans une **Release** GitHub.
+Pousser un tag `v2.0.0` publie aussi le `.zip` dans une **Release** GitHub.
+
+### En cas d'alerte antivirus (faux positif)
+
+L'application n'est pas signée numériquement (un certificat de signature de code
+coûte cher), donc Windows SmartScreen ou un antivirus peut afficher un
+avertissement. Le jeu est 100 % local (aucun accès réseau) — c'est un faux
+positif dû à l'absence de signature. Solutions :
+
+- **SmartScreen** : « Informations complémentaires » → « Exécuter quand même ».
+- **Windows Defender** : *Sécurité Windows → Protection contre les virus →
+  Gérer les paramètres → Exclusions* → ajouter le dossier du jeu.
+- **Test immédiat sans exe** : ouvre simplement `index.html` dans un navigateur,
+  le jeu est identique et ne peut être bloqué par aucun antivirus.

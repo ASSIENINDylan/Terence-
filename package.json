@@ -7,7 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist:win": "electron-builder --win portable",
+    "dist:win": "electron-builder --win zip",
     "dist:win-installer": "electron-builder --win nsis"
   },
   "devDependencies": {
@@ -26,12 +26,9 @@
     },
     "win": {
       "target": [
-        { "target": "portable", "arch": ["x64"] }
+        { "target": "zip", "arch": ["x64"] }
       ],
-      "artifactName": "ShadowOfTheWarrior-${version}.${ext}"
-    },
-    "portable": {
-      "artifactName": "ShadowOfTheWarrior-${version}-portable.${ext}"
+      "artifactName": "ShadowOfTheWarrior-${version}-win64.${ext}"
     },
     "nsis": {
       "oneClick": true,

@@ -23,18 +23,18 @@ jobs:
       - name: Installer les dépendances
         run: npm install
 
-      - name: Compiler l'exécutable portable
+      - name: Compiler l'application (zip décompressé, sans auto-extraction)
         run: npm run dist:win
 
-      - name: Publier l'exécutable (artefact téléchargeable)
+      - name: Publier l'application (artefact téléchargeable)
         uses: actions/upload-artifact@v4
         with:
           name: ShadowOfTheWarrior-Windows
-          path: dist/*.exe
+          path: dist/*.zip
           if-no-files-found: error
 
       - name: Créer une Release (uniquement sur un tag vX.Y.Z)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.exe
+          files: dist/*.zip
