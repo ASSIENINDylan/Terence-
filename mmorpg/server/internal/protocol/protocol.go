@@ -25,6 +25,15 @@ const (
 	// TypeZoneDelta diffuse les changements d'une zone à chaque tick (T4) :
 	// arrivées, déplacements, départs.
 	TypeZoneDelta = "zone.delta"
+	// Combat au tour par tour (T5), déclenché par une rencontre.
+	// TypeCombatStart : un combat s'engage (participants, à qui de jouer).
+	TypeCombatStart = "combat.start"
+	// TypeCombatAction : action choisie par le joueur actif (client→serveur).
+	TypeCombatAction = "combat.action"
+	// TypeCombatEvent : résultat d'une action (dégâts, PV, tour suivant).
+	TypeCombatEvent = "combat.event"
+	// TypeCombatEnd : fin du combat (mort et réapparition, ou fuite).
+	TypeCombatEnd = "combat.end"
 	// TypeEcho est renvoyé par le serveur en écho d'un message reçu (T2).
 	TypeEcho = "echo"
 	// TypeError signale une erreur applicative sur la connexion.

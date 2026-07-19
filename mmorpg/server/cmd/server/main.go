@@ -76,8 +76,19 @@ func run(logger *slog.Logger) error {
 	// de session volatils en Redis.
 	authSvc := auth.NewService(db, rc, cfg.SessionTTL)
 
-	// Monde en mémoire (T3/T4) : zones-acteurs avec boucle de tick à TICK_HZ.
-	world := zone.NewManager(cfg.TickHz)
+	// Métadonnées de zone : où le combat (PvP) est autorisé (T5). Chargées une
+	// fois au démarrage — données de référence stables.
+	zones, err := db.ListZones(startCtx)
+	if err != nil {
+		return err
+	}
+	pvpZones := make(map[int]bool, len(zones))
+	for _, z := range zones {
+		pvpZones[z.ID] = z.PvPEnabled
+	}
+
+	// Monde en mémoire (T3/T4/T5) : zones-acteurs avec boucle de tick à TICK_HZ.
+	world := zone.NewManager(cfg.TickHz, pvpZones)
 	defer world.Close()
 
 	// Gateway temps réel (T2/T3) : handshake authentifié, puis chargement du

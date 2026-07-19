@@ -41,6 +41,7 @@ type World interface {
 	Enter(char domain.Character, sender zone.Sender) zone.SnapshotData
 	Leave(char domain.Character)
 	Move(char domain.Character, in zone.Intent)
+	CombatAction(char domain.Character, action string)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -121,6 +122,11 @@ type moveIntentPayload struct {
 	DY int `json:"dy"`
 }
 
+// combatActionPayload est la charge utile d'un message combat.action (T5).
+type combatActionPayload struct {
+	Action string `json:"action"` // "attack" | "flee"
+}
+
 // gameHandler construit le routage des messages de jeu pour une connexion et son
 // personnage. En T4 : les intentions de déplacement (le reste reste en écho,
 // hérité de T2, pour les types non encore gérés).
@@ -139,6 +145,16 @@ func (g *Gateway) gameHandler(conn *Conn, char domain.Character) func(protocol.E
 			// Le serveur ne retient que la direction ; il reste maître de la
 			// position (application autoritative au prochain tick).
 			g.world.Move(char, zone.Intent{DX: mi.DX, DY: mi.DY})
+		case protocol.TypeCombatAction:
+			var ca combatActionPayload
+			if err := env.DecodeData(&ca); err != nil {
+				conn.SendEnvelope(protocol.TypeError, env.Seq, protocol.ErrorData{
+					Code:    "invalid_combat_action",
+					Message: "action de combat mal formée",
+				})
+				return
+			}
+			g.world.CombatAction(char, ca.Action)
 		default:
 			// Types non encore gérés : écho (hérité de T2).
 			conn.SendEnvelope(protocol.TypeEcho, env.Seq, env.Data)

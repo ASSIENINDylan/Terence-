@@ -42,7 +42,7 @@ func (fakeCharacters) TouchLastPlayed(context.Context, string) error { return ni
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	world := zone.NewManager(12)
+	world := zone.NewManager(12, nil)
 	t.Cleanup(world.Close)
 	gw := New(fakeAuth{good: "valid-token"}, fakeCharacters{}, world, log)
 	srv := httptest.NewServer(gw)

@@ -21,7 +21,7 @@ build `T0 → T8` du plan technique.
 | **T2** | WebSocket + Gateway : handshake authentifié, écho. | ✅ **fait** |
 | **T3** | Personnage persistant + entrée en zone + `zone.snapshot`. | ✅ **fait** |
 | **T4** | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | ✅ **fait** |
-| T5 | Combat autoritatif (auto-attaque + PV + mort + respawn). | à venir |
+| **T5** | Combat autoritatif au tour par tour, déclenché par la rencontre. | ✅ **fait** |
 | T6 | Inventaire : templates + exemplaires, ramasser/équiper/utiliser. | à venir |
 | T7 | Chat (global + faction) via pub/sub Redis + appartenance village. | à venir |
 | T8 | Persistance robuste : write-back périodique + flush à la déconnexion + métriques. | à venir |
@@ -175,6 +175,40 @@ zone.delta aux joueurs de la zone. »* ✅ — vérifié de bout en bout : J1 en
 intention, le serveur avance sa position tick par tick (x = 4, 8, 12, …), et J2
 reçoit les `zone.delta` correspondants en continu.
 
+## T5 — ce qui est livré
+
+Le combat, **au tour par tour, déclenché par la rencontre** (choix de design par
+rapport au plan initial qui prévoyait de l'auto-attaque temps réel).
+
+- **Rencontre = engagement** : à chaque tick, la zone détecte deux personnages
+  de **factions opposées** suffisamment proches et engage un combat 1v1 —
+  uniquement dans une **zone PvP** (jamais dans une zone sûre : anti-griefing,
+  §10). Les alliés ne se combattent pas.
+- **Tour par tour** : initiative à l'**agilité** ; à son tour, le joueur choisit
+  **Attaquer** (dégâts gouvernés par force/défense) ou **Fuir** (réussite selon
+  l'agilité). Un tour non joué dans le délai déclenche une attaque automatique
+  (pas de blocage). Le mouvement est suspendu pendant le combat.
+- **Autoritatif** : le serveur calcule seul les dégâts, les PV et l'issue ; le
+  client n'envoie qu'un choix d'action. Tout vit dans l'acteur de zone (pas de
+  verrou ; vérifié au détecteur `-race`).
+- **Mort & réapparition** : à 0 PV, le perdant réapparaît en pleine santé au
+  point d'apparition, et les deux combattants gagnent une brève immunité
+  (anti-re-engagement immédiat).
+- **Messages** : `combat.start` (participants, à qui de jouer) → `combat.action`
+  (client) → `combat.event` (dégâts, PV, tour suivant) → `combat.end` (mort +
+  réapparition, ou fuite).
+
+> Portée : les personnages apparaissent au village (zone **sûre**) et la
+> **transition entre zones** n'est pas encore implémentée — atteindre une zone
+> PvP en jeu normal viendra plus tard. Le combat est donc validé en plaçant des
+> personnages dans la zone de plaines ; la maquette navigateur, elle, rend le
+> combat directement jouable.
+
+**Critère de validation T5** : *« Deux personnages hostiles se rencontrent en se
+déplaçant, un combat au tour par tour s'engage, l'un meurt et réapparaît. »* ✅ —
+vérifié de bout en bout : Lumière vs Ombre en zone de plaines, tours alternés à
+20 PV de dégâts, mort après 5 coups (100 PV) et réapparition à 100 PV.
+
 ## Démarrage rapide
 
 ### Avec docker compose (recommandé)
@@ -282,7 +316,7 @@ mmorpg/
       httpapi/                  # API HTTP : health check + auth + route /ws
       gateway/                  # WebSocket : handshake, entrée en jeu, Conn
       protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation
-      zone/                     # zones-acteurs : tick, présences, mouvement, deltas (T3/T4)
+      zone/                     # zones-acteurs : tick, mouvement, deltas (T3/T4), combat (T5)
       domain/                   # entités métier : character (T3), item… (T6)
     migrations/                 # SQL versionné, embarqué dans le binaire
       0001_init.sql
