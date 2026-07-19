@@ -1,0 +1,14 @@
+# Secrets et config locale
+.env
+
+# Binaires de build
+/server/server
+/server/bin/
+*.exe
+
+# Artefacts Go
+*.test
+*.out
+
+# Dump Redis (généré si redis-server tourne dans l'arbre du projet)
+dump.rdb
