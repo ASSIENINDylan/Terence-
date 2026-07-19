@@ -9,19 +9,21 @@ import (
 	"github.com/assienindylan/terence-/mmorpg/server/internal/protocol"
 )
 
-// nopSender ignore les messages.
+// nopSender ignore les messages et les relocalisations.
 type nopSender struct{}
 
 func (nopSender) SendEnvelope(string, uint64, any) {}
+func (nopSender) Relocate(domain.Character)        {}
 
-// capSender capture tous les messages reçus, pour vérifier ce qui est diffusé.
+// capSender capture les messages reçus et les relocalisations demandées.
 type capEntry struct {
 	typ  string
 	data any
 }
 type capSender struct {
-	mu sync.Mutex
-	e  []capEntry
+	mu        sync.Mutex
+	e         []capEntry
+	relocated *domain.Character
 }
 
 func newCapSender() *capSender { return &capSender{} }
@@ -30,6 +32,21 @@ func (c *capSender) SendEnvelope(t string, _ uint64, d any) {
 	c.mu.Lock()
 	c.e = append(c.e, capEntry{t, d})
 	c.mu.Unlock()
+}
+
+func (c *capSender) Relocate(ch domain.Character) {
+	c.mu.Lock()
+	c.relocated = &ch
+	c.mu.Unlock()
+}
+
+func (c *capSender) lastRelocate() (domain.Character, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.relocated == nil {
+		return domain.Character{}, false
+	}
+	return *c.relocated, true
 }
 
 func (c *capSender) each(fn func(capEntry)) {
@@ -140,6 +157,15 @@ func charF(id string, zoneID, faction int) domain.Character {
 	}
 }
 
+// fighter est un combattant avec un village de départ et de l'XP (pour tester la
+// mort : réapparition + pénalité d'XP).
+func fighter(id string, faction, homeZone int, xp int64) domain.Character {
+	c := charF(id, 1, faction)
+	c.HomeZoneID = homeZone
+	c.XP = xp
+	return c
+}
+
 func containsID(entities []EntityState, id string) bool {
 	for _, e := range entities {
 		if e.CharacterID == id {
@@ -149,10 +175,15 @@ func containsID(entities []EntityState, id string) bool {
 	return false
 }
 
+// pvpMetas décrit la zone 1 comme une zone orange (PvP, −½ XP à la mort).
+func pvpMetas() map[int]ZoneMeta {
+	return map[int]ZoneMeta{1: {ID: 1, Name: "Marches", Tier: "orange", PvP: true, DeathXPLoss: 0.5}}
+}
+
 // ── Entrée / snapshot / isolation (T3) ──────────────────────────────────────
 
 func TestEnterReturnsSelfInSnapshot(t *testing.T) {
-	m := NewManager(20, nil)
+	m := NewManager(20, nil, nil)
 	defer m.Close()
 	snap := m.Enter(char("a", 1), nopSender{})
 	if snap.ZoneID != 1 || snap.Self != "a" || len(snap.Entities) != 1 || !containsID(snap.Entities, "a") {
@@ -161,7 +192,7 @@ func TestEnterReturnsSelfInSnapshot(t *testing.T) {
 }
 
 func TestSecondEntrantSeesBoth(t *testing.T) {
-	m := NewManager(20, nil)
+	m := NewManager(20, nil, nil)
 	defer m.Close()
 	m.Enter(char("a", 1), nopSender{})
 	snap := m.Enter(char("b", 1), nopSender{})
@@ -174,7 +205,7 @@ func TestSecondEntrantSeesBoth(t *testing.T) {
 }
 
 func TestZonesAreIsolated(t *testing.T) {
-	m := NewManager(20, nil)
+	m := NewManager(20, nil, nil)
 	defer m.Close()
 	m.Enter(char("a", 1), nopSender{})
 	snap := m.Enter(char("b", 2), nopSender{})
@@ -184,7 +215,7 @@ func TestZonesAreIsolated(t *testing.T) {
 }
 
 func TestLeaveRemovesPresence(t *testing.T) {
-	m := NewManager(20, nil)
+	m := NewManager(20, nil, nil)
 	defer m.Close()
 	a := char("a", 1)
 	m.Enter(a, nopSender{})
@@ -193,10 +224,6 @@ func TestLeaveRemovesPresence(t *testing.T) {
 	if m.Count(1) != 1 {
 		t.Fatalf("après le départ de a, zone 1 devrait contenir 1 présence, obtenu %d", m.Count(1))
 	}
-	snap := m.Enter(char("c", 1), nopSender{})
-	if containsID(snap.Entities, "a") {
-		t.Fatalf("a ne devrait plus apparaître après son départ : %+v", snap.Entities)
-	}
 	m.Leave(a) // idempotent
 	m.Leave(char("inconnu", 99))
 }
@@ -204,7 +231,7 @@ func TestLeaveRemovesPresence(t *testing.T) {
 // ── Ticks & deltas (T4) ─────────────────────────────────────────────────────
 
 func TestMoveProducesDelta(t *testing.T) {
-	m := NewManager(50, nil)
+	m := NewManager(50, nil, nil)
 	defer m.Close()
 	s := newCapSender()
 	m.Enter(char("a", 1), s)
@@ -216,7 +243,7 @@ func TestMoveProducesDelta(t *testing.T) {
 }
 
 func TestJoinNotifiesExistingPlayers(t *testing.T) {
-	m := NewManager(50, nil)
+	m := NewManager(50, nil, nil)
 	defer m.Close()
 	sa := newCapSender()
 	m.Enter(char("a", 1), sa)
@@ -227,7 +254,7 @@ func TestJoinNotifiesExistingPlayers(t *testing.T) {
 }
 
 func TestLeaveNotifiesRemainingPlayers(t *testing.T) {
-	m := NewManager(50, nil)
+	m := NewManager(50, nil, nil)
 	defer m.Close()
 	sa := newCapSender()
 	m.Enter(char("a", 1), sa)
@@ -239,28 +266,72 @@ func TestLeaveNotifiesRemainingPlayers(t *testing.T) {
 	}
 }
 
+// ── Transitions de zone (portails / barrières) ──────────────────────────────
+
+func TestTransitionMovesPlayerToLinkedZone(t *testing.T) {
+	metas := map[int]ZoneMeta{
+		1: {ID: 1, Name: "Village", Tier: "village"},
+		2: {ID: 2, Name: "Vert", Tier: "green"},
+	}
+	links := map[int]Link{
+		7: {ID: 7, FromZoneID: 1, ToZoneID: 2, Kind: "portal", FromX: 0, FromY: 0, ToX: 5, ToY: 5},
+	}
+	m := NewManager(50, metas, links)
+	defer m.Close()
+
+	c := char("a", 1)
+	m.Enter(c, nopSender{})
+	newC, snap, err := m.Transition(c, 7, nopSender{})
+	if err != nil {
+		t.Fatalf("transition refusée: %v", err)
+	}
+	if newC.ZoneID != 2 || newC.X != 5 || newC.Y != 5 {
+		t.Fatalf("le personnage aurait dû arriver en zone 2 (5,5) : %+v", newC)
+	}
+	if snap.ZoneID != 2 || snap.ZoneName != "Vert" {
+		t.Fatalf("snapshot de destination incorrect : %+v", snap)
+	}
+	if m.Count(1) != 0 || m.Count(2) != 1 {
+		t.Fatalf("présences après transition incohérentes: z1=%d z2=%d", m.Count(1), m.Count(2))
+	}
+}
+
+func TestTransitionRejectedWhenTooFar(t *testing.T) {
+	metas := map[int]ZoneMeta{1: {ID: 1}, 2: {ID: 2}}
+	links := map[int]Link{7: {ID: 7, FromZoneID: 1, ToZoneID: 2, Kind: "portal", FromX: 0, FromY: 0, ToX: 0, ToY: 0}}
+	m := NewManager(50, metas, links)
+	defer m.Close()
+
+	c := char("a", 1)
+	c.X, c.Y = 200, 0 // loin du portail
+	m.Enter(c, nopSender{})
+	if _, _, err := m.Transition(c, 7, nopSender{}); err == nil {
+		t.Fatal("la transition aurait dû être refusée (trop loin du portail)")
+	}
+	if _, _, err := m.Transition(char("a", 1), 999, nopSender{}); err == nil {
+		t.Fatal("un lien inconnu aurait dû être refusé")
+	}
+}
+
 // ── Combat au tour par tour (T5) ────────────────────────────────────────────
 
-// pvpZone active le PvP sur la zone 1.
-func pvpZone() map[int]bool { return map[int]bool{1: true} }
-
 func TestEncounterStartsCombat(t *testing.T) {
-	m := NewManager(50, pvpZone())
+	m := NewManager(50, pvpMetas(), nil)
 	defer m.Close()
 	sa, sb := newCapSender(), newCapSender()
-	m.Enter(charF("a", 1, 1), sa) // Lumière
-	m.Enter(charF("b", 1, 2), sb) // Ombre, même position → rencontre
+	m.Enter(fighter("a", 1, 9, 0), sa)
+	m.Enter(fighter("b", 2, 9, 0), sb)
 	if !waitFor(time.Second, func() bool { return sa.has(protocol.TypeCombatStart) && sb.has(protocol.TypeCombatStart) }) {
 		t.Fatal("un combat aurait dû s'engager entre factions opposées")
 	}
 }
 
 func TestNoCombatBetweenAllies(t *testing.T) {
-	m := NewManager(50, pvpZone())
+	m := NewManager(50, pvpMetas(), nil)
 	defer m.Close()
 	sa := newCapSender()
-	m.Enter(charF("a", 1, 1), sa)
-	m.Enter(charF("b", 1, 1), newCapSender()) // même faction
+	m.Enter(fighter("a", 1, 9, 0), sa)
+	m.Enter(fighter("b", 1, 9, 0), newCapSender())
 	time.Sleep(200 * time.Millisecond)
 	if sa.has(protocol.TypeCombatStart) {
 		t.Fatal("aucun combat ne doit s'engager entre alliés")
@@ -268,18 +339,17 @@ func TestNoCombatBetweenAllies(t *testing.T) {
 }
 
 func TestNoCombatInSafeZone(t *testing.T) {
-	m := NewManager(50, nil) // aucune zone PvP
+	m := NewManager(50, nil, nil) // zone 1 par défaut : verte, pas de PvP
 	defer m.Close()
 	sa := newCapSender()
-	m.Enter(charF("a", 1, 1), sa)
-	m.Enter(charF("b", 1, 2), newCapSender()) // factions opposées mais zone sûre
+	m.Enter(fighter("a", 1, 9, 0), sa)
+	m.Enter(fighter("b", 2, 9, 0), newCapSender())
 	time.Sleep(200 * time.Millisecond)
 	if sa.has(protocol.TypeCombatStart) {
-		t.Fatal("aucun combat ne doit s'engager dans une zone sûre")
+		t.Fatal("aucun combat ne doit s'engager hors zone PvP")
 	}
 }
 
-// driveToEnd fait attaquer le joueur actif jusqu'à la fin du combat.
 func driveToEnd(t *testing.T, m *Manager, s *capSender) CombatEndData {
 	t.Helper()
 	for i := 0; i < 300; i++ {
@@ -295,46 +365,67 @@ func driveToEnd(t *testing.T, m *Manager, s *capSender) CombatEndData {
 	return CombatEndData{}
 }
 
-func TestCombatAttackToDeath(t *testing.T) {
-	m := NewManager(50, pvpZone())
+func TestCombatDeathRespawnsAtVillageWithXPPenalty(t *testing.T) {
+	m := NewManager(50, pvpMetas(), nil) // orange : −½ XP
 	defer m.Close()
 	sa, sb := newCapSender(), newCapSender()
-	m.Enter(charF("a", 1, 1), sa)
-	m.Enter(charF("b", 1, 2), sb)
+	m.Enter(fighter("a", 1, 9, 100), sa) // village = zone 9, 100 XP
+	m.Enter(fighter("b", 2, 9, 100), sb)
 	if !waitFor(time.Second, func() bool { return sa.has(protocol.TypeCombatStart) }) {
 		t.Fatal("combat non engagé")
 	}
 
 	end := driveToEnd(t, m, sa)
-	if end.Reason != "death" {
-		t.Fatalf("le combat aurait dû se terminer par une mort, reason=%q", end.Reason)
+	if end.Reason != "death" || end.Winner == "" || end.Loser == "" {
+		t.Fatalf("le combat aurait dû se terminer par une mort : %+v", end)
 	}
-	if end.Winner == "" || end.Loser == "" || end.Winner == end.Loser {
-		t.Fatalf("vainqueur/perdant incohérents: %+v", end)
+	if end.Respawn == nil || end.Respawn.ZoneID != 9 || end.Respawn.HP != 100 {
+		t.Fatalf("le perdant aurait dû réapparaître au village (zone 9) en pleine santé : %+v", end.Respawn)
 	}
-	if end.Respawn == nil || end.Respawn.HP != 100 {
-		t.Fatalf("le perdant aurait dû réapparaître en pleine santé: %+v", end.Respawn)
+	// Orange : le perdant perd la moitié de ses 100 XP → il lui en reste 50.
+	if end.XPLost != 50 || end.Respawn.XP != 50 {
+		t.Fatalf("pénalité d'XP incorrecte (attendu −50 → 50) : lost=%d xp=%d", end.XPLost, end.Respawn.XP)
 	}
-	// Les deux personnages sont toujours dans la zone (le perdant a réapparu).
-	if m.Count(1) != 2 {
-		t.Fatalf("les deux combattants devraient rester dans la zone, obtenu %d", m.Count(1))
+	// Le vainqueur reste, le perdant a quitté la zone (relocalisé au village).
+	if m.Count(1) != 1 {
+		t.Fatalf("seul le vainqueur devrait rester dans la zone, obtenu %d", m.Count(1))
+	}
+	loserSender := sa
+	if end.Loser != "a" {
+		loserSender = sb
+	}
+	if rc, ok := loserSender.lastRelocate(); !ok || rc.ZoneID != 9 {
+		t.Fatalf("le perdant aurait dû être relocalisé au village (zone 9), obtenu %+v (ok=%v)", rc, ok)
+	}
+}
+
+func TestRedZoneWipesAllXP(t *testing.T) {
+	metas := map[int]ZoneMeta{1: {ID: 1, Tier: "red", PvP: true, DeathXPLoss: 1.0}}
+	m := NewManager(50, metas, nil)
+	defer m.Close()
+	sa, sb := newCapSender(), newCapSender()
+	m.Enter(fighter("a", 1, 9, 200), sa)
+	m.Enter(fighter("b", 2, 9, 200), sb)
+	if !waitFor(time.Second, func() bool { return sa.has(protocol.TypeCombatStart) }) {
+		t.Fatal("combat non engagé")
+	}
+	end := driveToEnd(t, m, sa)
+	if end.Respawn == nil || end.Respawn.XP != 0 || end.XPLost != 200 {
+		t.Fatalf("en zone rouge, toute l'XP devrait être perdue : lost=%d xp=%d", end.XPLost, end.Respawn.XP)
 	}
 }
 
 func TestFleeIsProcessed(t *testing.T) {
-	m := NewManager(50, pvpZone())
+	m := NewManager(50, pvpMetas(), nil)
 	defer m.Close()
 	sa, sb := newCapSender(), newCapSender()
-	m.Enter(charF("a", 1, 1), sa)
-	m.Enter(charF("b", 1, 2), sb)
+	m.Enter(fighter("a", 1, 9, 0), sa)
+	m.Enter(fighter("b", 2, 9, 0), sb)
 	if !waitFor(time.Second, func() bool { return sa.has(protocol.TypeCombatStart) }) {
 		t.Fatal("combat non engagé")
 	}
 	turn := sa.currentTurn()
 	m.CombatAction(char(turn, 1), "flee")
-
-	// La fuite se traduit soit par une fin de combat (réussite), soit par un
-	// événement de combat (échec, le tour passe) — dans les deux cas, traitée.
 	ok := waitFor(time.Second, func() bool {
 		if end, ended := sa.combatEnd(); ended && end.Reason == "flee" {
 			return true

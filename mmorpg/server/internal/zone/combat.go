@@ -65,21 +65,25 @@ type CombatEventData struct {
 	Turn     string `json:"turn,omitempty"` // à qui de jouer ensuite ("" si terminé)
 }
 
-// RespawnInfo décrit la réapparition d'un personnage mort.
+// RespawnInfo décrit la réapparition d'un personnage mort (au village).
 type RespawnInfo struct {
 	CharacterID string `json:"character_id"`
+	ZoneID      int    `json:"zone_id"`
 	X           int    `json:"x"`
 	Y           int    `json:"y"`
 	HP          int    `json:"hp"`
+	XP          int64  `json:"xp"`
 }
 
 // CombatEndData : fin du combat.
 type CombatEndData struct {
-	CombatID string       `json:"combat_id"`
-	Winner   string       `json:"winner,omitempty"`
-	Loser    string       `json:"loser,omitempty"`
-	Reason   string       `json:"reason"` // "death" | "flee" | "opponent_left"
-	Respawn  *RespawnInfo `json:"respawn,omitempty"`
+	CombatID     string       `json:"combat_id"`
+	Winner       string       `json:"winner,omitempty"`
+	Loser        string       `json:"loser,omitempty"`
+	Reason       string       `json:"reason"` // "death" | "flee" | "opponent_left"
+	Respawn      *RespawnInfo `json:"respawn,omitempty"`
+	XPLost       int64        `json:"xp_lost,omitempty"`
+	WinnerXPGain int64        `json:"winner_xp_gain,omitempty"`
 }
 
 // ── Détection des rencontres ────────────────────────────────────────────────
@@ -87,7 +91,7 @@ type CombatEndData struct {
 // detectEncounters engage un combat entre deux membres libres de factions
 // opposées suffisamment proches, dans une zone où le PvP est autorisé.
 func (z *Zone) detectEncounters() {
-	if !z.pvp {
+	if !z.meta.PvP {
 		return
 	}
 	var free []*member
@@ -114,7 +118,7 @@ func (z *Zone) detectEncounters() {
 
 func (z *Zone) startCombat(a, b *member) {
 	z.combatN++
-	id := fmt.Sprintf("cb-%d-%d", z.id, z.combatN)
+	id := fmt.Sprintf("cb-%d-%d", z.meta.ID, z.combatN)
 	a.combatID, b.combatID = id, id
 	a.intent, b.intent = Intent{}, Intent{} // le mouvement s'arrête
 
@@ -195,22 +199,55 @@ func (z *Zone) resolveAction(c *combat, actorID, action string) {
 	z.sendBoth(c, protocol.TypeCombatEvent, ev)
 }
 
-// handleDeath fait réapparaître le perdant et clôt le combat.
+// handleDeath applique la pénalité d'XP selon le palier de la zone, récompense
+// le vainqueur, clôt le combat et relocalise le perdant vers son village.
 func (z *Zone) handleDeath(c *combat, winnerID, loserID string) {
 	loser := z.members[loserID]
+	winner := z.members[winnerID]
+
+	var xpLost, newXP, winGain int64
 	if loser != nil {
-		loser.char.HP = loser.char.MaxHP // réapparition en pleine santé
-		loser.char.X, loser.char.Y = 0, 0
-		z.dirty[loserID] = true // sa nouvelle position sera diffusée au tick
+		xpLost = int64(float64(loser.char.XP) * z.meta.DeathXPLoss)
+		newXP = loser.char.XP - xpLost
+		if newXP < 0 {
+			newXP = 0
+		}
 	}
-	respawn := &RespawnInfo{CharacterID: loserID, X: 0, Y: 0}
+	if winner != nil {
+		winGain = combatXPReward
+		winner.char.XP += winGain // persisté à la déconnexion/transition (T8)
+	}
+
+	homeZone := z.meta.ID // repli défensif si le village est inconnu
+	if loser != nil && loser.char.HomeZoneID != 0 {
+		homeZone = loser.char.HomeZoneID
+	}
+	respawn := &RespawnInfo{CharacterID: loserID, ZoneID: homeZone, X: 0, Y: 0, HP: 0, XP: newXP}
 	if loser != nil {
 		respawn.HP = loser.char.MaxHP
 	}
-	z.endCombat(c, winnerID, loserID, "death", respawn)
+	z.sendBoth(c, protocol.TypeCombatEnd, CombatEndData{
+		CombatID: c.id, Winner: winnerID, Loser: loserID, Reason: "death",
+		Respawn: respawn, XPLost: xpLost, WinnerXPGain: winGain,
+	})
+
+	z.setCooldown(winnerID)
+	z.clearCombat(c)
+
+	// Relocalise le perdant vers son village (hors de cette zone).
+	if loser != nil {
+		relocated := loser.char
+		relocated.HP = loser.char.MaxHP
+		relocated.XP = newXP
+		relocated.ZoneID = homeZone
+		relocated.X, relocated.Y = 0, 0
+		delete(z.members, loserID)
+		z.left = append(z.left, loserID)
+		loser.client.Relocate(relocated)
+	}
 }
 
-// endCombat nettoie le combat, applique l'immunité post-combat et notifie.
+// endCombat clôt un combat sans mort (fuite), avec immunité post-combat.
 func (z *Zone) endCombat(c *combat, winner, loser, reason string, respawn *RespawnInfo) {
 	end := CombatEndData{CombatID: c.id, Winner: winner, Loser: loser, Reason: reason, Respawn: respawn}
 	z.sendBoth(c, protocol.TypeCombatEnd, end)
@@ -223,7 +260,7 @@ func (z *Zone) endCombat(c *combat, winner, loser, reason string, respawn *Respa
 func (z *Zone) endByForfeit(c *combat, quitterID string) {
 	winnerID := c.other(quitterID)
 	if w := z.members[winnerID]; w != nil {
-		w.sender.SendEnvelope(protocol.TypeCombatEnd, 0, CombatEndData{
+		w.client.SendEnvelope(protocol.TypeCombatEnd, 0, CombatEndData{
 			CombatID: c.id, Winner: winnerID, Loser: quitterID, Reason: "opponent_left",
 		})
 		w.cooldownUntil = z.tick + z.cooldownTicks
@@ -251,10 +288,10 @@ func (z *Zone) setCooldown(id string) {
 // sendBoth envoie un message aux deux participants encore présents.
 func (z *Zone) sendBoth(c *combat, msgType string, data any) {
 	if m := z.members[c.a]; m != nil {
-		m.sender.SendEnvelope(msgType, 0, data)
+		m.client.SendEnvelope(msgType, 0, data)
 	}
 	if m := z.members[c.b]; m != nil {
-		m.sender.SendEnvelope(msgType, 0, data)
+		m.client.SendEnvelope(msgType, 0, data)
 	}
 }
 

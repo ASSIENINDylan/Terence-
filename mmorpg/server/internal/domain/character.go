@@ -13,16 +13,21 @@ type Character struct {
 	FactionID int
 
 	Level int
+	XP    int64
 	HP    int
 	MaxHP int
-	Str   int
-	Def   int
-	Agi   int
+	Str   int // attaque
+	Def   int // défense
+	Agi   int // agilité (initiative + fuite)
 
 	// Position courante dans le monde.
 	ZoneID int
 	X      int
 	Y      int
+
+	// HomeZoneID est la zone du village de départ : lieu de réapparition à la
+	// mort (§ paliers de zones).
+	HomeZoneID int
 }
 
 // Alive indique si le personnage a encore des points de vie. Le combat (T5)

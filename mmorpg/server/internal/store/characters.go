@@ -13,14 +13,23 @@ import (
 // ErrNoCharacter : le compte ne possède encore aucun personnage.
 var ErrNoCharacter = errors.New("store: aucun personnage pour ce compte")
 
-// startingZoneCode est la zone où apparaissent les nouveaux personnages (seed
-// 0002). Le spawn est volontairement au centre logique (0,0) en v0.1.
-const startingZoneCode = "z_village_start"
+// Éléments de départ possibles (un village par élément).
+var elements = []string{"feu", "eau", "terre"}
+
+// ValidElement indique si e est un élément de départ connu.
+func ValidElement(e string) bool {
+	for _, x := range elements {
+		if x == e {
+			return true
+		}
+	}
+	return false
+}
 
 // GetOrCreateForAccount retourne le personnage du compte, en en créant un par
-// défaut à la première connexion. En v0.1 un compte a un seul personnage ; la
-// sélection multi-personnages viendra plus tard.
-func (s *Store) GetOrCreateForAccount(ctx context.Context, accountID int64) (domain.Character, error) {
+// défaut à la première connexion dans le village de l'élément demandé. Si
+// element est vide ou invalide, un élément est attribué de façon déterministe.
+func (s *Store) GetOrCreateForAccount(ctx context.Context, accountID int64, element string) (domain.Character, error) {
 	c, err := s.firstCharacter(ctx, accountID)
 	if err == nil {
 		return c, nil
@@ -28,22 +37,32 @@ func (s *Store) GetOrCreateForAccount(ctx context.Context, accountID int64) (dom
 	if !errors.Is(err, ErrNoCharacter) {
 		return domain.Character{}, err
 	}
-	return s.createDefaultCharacter(ctx, accountID)
+	if !ValidElement(element) {
+		element = elements[(accountID-1)%int64(len(elements))]
+	}
+	return s.createCharacter(ctx, accountID, element)
 }
 
-// firstCharacter charge le plus ancien personnage non supprimé du compte.
-func (s *Store) firstCharacter(ctx context.Context, accountID int64) (domain.Character, error) {
+const characterCols = `c.id, c.account_id, c.name, c.faction_id, c.level, c.xp,
+	c.hp, c.max_hp, c.str, c.def, c.agi,
+	COALESCE(c.pos_zone_id, 0), c.pos_x, c.pos_y, COALESCE(v.spawn_zone_id, 0)`
+
+func scanCharacter(row pgx.Row) (domain.Character, error) {
 	var c domain.Character
-	err := s.pool.QueryRow(ctx, `
-		SELECT id, account_id, name, faction_id, level, hp, max_hp, str, def, agi,
-		       COALESCE(pos_zone_id, 0), pos_x, pos_y
-		FROM characters
-		WHERE account_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at
-		LIMIT 1`,
-		accountID,
-	).Scan(&c.ID, &c.AccountID, &c.Name, &c.FactionID, &c.Level, &c.HP, &c.MaxHP,
-		&c.Str, &c.Def, &c.Agi, &c.ZoneID, &c.X, &c.Y)
+	err := row.Scan(&c.ID, &c.AccountID, &c.Name, &c.FactionID, &c.Level, &c.XP,
+		&c.HP, &c.MaxHP, &c.Str, &c.Def, &c.Agi,
+		&c.ZoneID, &c.X, &c.Y, &c.HomeZoneID)
+	return c, err
+}
+
+func (s *Store) firstCharacter(ctx context.Context, accountID int64) (domain.Character, error) {
+	c, err := scanCharacter(s.pool.QueryRow(ctx, `
+		SELECT `+characterCols+`
+		FROM characters c
+		LEFT JOIN villages v ON v.id = c.home_village_id
+		WHERE c.account_id = $1 AND c.deleted_at IS NULL
+		ORDER BY c.created_at
+		LIMIT 1`, accountID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.Character{}, ErrNoCharacter
@@ -53,30 +72,56 @@ func (s *Store) firstCharacter(ctx context.Context, accountID int64) (domain.Cha
 	return c, nil
 }
 
-// createDefaultCharacter crée un personnage de départ : faction par défaut (la
-// plus ancienne), placé dans la zone de départ. Le nom est unique par compte.
-func (s *Store) createDefaultCharacter(ctx context.Context, accountID int64) (domain.Character, error) {
-	name := fmt.Sprintf("Aventurier-%d", accountID)
+// createCharacter crée un personnage de départ dans le village de l'élément
+// choisi, avec le bonus de statistique de ce village (feu→attaque, eau→agilité,
+// terre→défense).
+func (s *Store) createCharacter(ctx context.Context, accountID int64, element string) (domain.Character, error) {
+	name := fmt.Sprintf("%s-%d", elementTitle(element), accountID)
 
-	var c domain.Character
+	var id string
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO characters (account_id, name, faction_id, pos_zone_id, pos_x, pos_y)
-		VALUES (
-			$1,
-			$2,
-			(SELECT id FROM factions ORDER BY id LIMIT 1),
-			(SELECT id FROM zones WHERE code = $3),
-			0, 0
-		)
-		RETURNING id, account_id, name, faction_id, level, hp, max_hp, str, def, agi,
-		          COALESCE(pos_zone_id, 0), pos_x, pos_y`,
-		accountID, name, startingZoneCode,
-	).Scan(&c.ID, &c.AccountID, &c.Name, &c.FactionID, &c.Level, &c.HP, &c.MaxHP,
-		&c.Str, &c.Def, &c.Agi, &c.ZoneID, &c.X, &c.Y)
+		INSERT INTO characters (account_id, name, faction_id, home_village_id, pos_zone_id, pos_x, pos_y, str, def, agi)
+		SELECT $1, $2, f.id, v.id, z.id, 0, 0,
+		       10 + CASE WHEN f.bonus_stat = 'str' THEN 5 ELSE 0 END,
+		       10 + CASE WHEN f.bonus_stat = 'def' THEN 5 ELSE 0 END,
+		       10 + CASE WHEN f.bonus_stat = 'agi' THEN 5 ELSE 0 END
+		FROM factions f
+		JOIN zones z    ON z.code = 'village_' || f.element
+		JOIN villages v ON v.spawn_zone_id = z.id AND v.faction_id = f.id
+		WHERE f.element = $3
+		RETURNING id`,
+		accountID, name, element,
+	).Scan(&id)
 	if err != nil {
-		return domain.Character{}, fmt.Errorf("store: création du personnage: %w", err)
+		return domain.Character{}, fmt.Errorf("store: création du personnage (%s): %w", element, err)
 	}
-	return c, nil
+	return s.firstCharacter(ctx, accountID)
+}
+
+func elementTitle(e string) string {
+	switch e {
+	case "feu":
+		return "Feu"
+	case "eau":
+		return "Eau"
+	case "terre":
+		return "Terre"
+	}
+	return "Aventurier"
+}
+
+// SaveState persiste la position, la zone, les PV et l'XP d'un personnage. Appelé
+// aux transitions de zone et aux morts (persistance périodique complète en T8).
+func (s *Store) SaveState(ctx context.Context, c domain.Character) error {
+	if _, err := s.pool.Exec(ctx, `
+		UPDATE characters
+		SET pos_zone_id = $2, pos_x = $3, pos_y = $4, hp = $5, xp = $6, last_played_at = now()
+		WHERE id = $1`,
+		c.ID, c.ZoneID, c.X, c.Y, c.HP, c.XP,
+	); err != nil {
+		return fmt.Errorf("store: sauvegarde de l'état du personnage: %w", err)
+	}
+	return nil
 }
 
 // TouchLastPlayed met à jour l'horodatage de dernière session du personnage.

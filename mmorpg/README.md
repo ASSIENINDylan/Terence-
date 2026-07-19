@@ -205,9 +205,67 @@ rapport au plan initial qui prévoyait de l'auto-attaque temps réel).
 > combat directement jouable.
 
 **Critère de validation T5** : *« Deux personnages hostiles se rencontrent en se
-déplaçant, un combat au tour par tour s'engage, l'un meurt et réapparaît. »* ✅ —
-vérifié de bout en bout : Lumière vs Ombre en zone de plaines, tours alternés à
-20 PV de dégâts, mort après 5 coups (100 PV) et réapparition à 100 PV.
+déplaçant, un combat au tour par tour s'engage, l'un meurt et réapparaît. »* ✅
+
+## Monde à paliers, villages élémentaires & transitions
+
+Le monde v0.1 (migration `0003`) : trois villages, des paliers de danger, et la
+navigation entre zones.
+
+### Les trois villages
+
+Chaque joueur naît dans le village de son **élément**, qui confère un bonus de
+statistique :
+
+| Village | Élément | Bonus |
+|---------|---------|-------|
+| Foyer du Feu | Feu | **+attaque** |
+| Source de l'Eau | Eau | **+agilité** |
+| Racine de la Terre | Terre | **+défense** |
+
+L'élément peut être choisi au premier accès (`?element=feu|eau|terre`) ; à défaut
+il est attribué de façon déterministe. L'**agilité** décide qui frappe en premier
+et facilite la fuite (T5).
+
+### Les paliers de zones
+
+| Palier | PvP | PvE | Mort → | Accès |
+|--------|-----|-----|--------|-------|
+| **village** (sûr) | non | — | réapparition ici | — |
+| **vert** | non | oui | réapparition au village | **portail** depuis le village |
+| **orange** | oui | oui | village, **−½ XP** | **portail** depuis le vert |
+| **rouge** | oui | oui | village, **−toute l'XP** | **barrière** depuis l'orange |
+
+Les zones **orange et rouge sont partagées** entre les trois éléments : c'est là
+qu'ils se rencontrent et s'affrontent. Toute mort, quel que soit le palier,
+renvoie au village.
+
+### Transitions
+
+- **`zone.transition`** (client → serveur, `{link_id}`) : le joueur emprunte un
+  portail/barrière. Le serveur valide (bon lien, proximité du portail, niveau
+  requis pour une barrière), **relit sa position autoritative** dans la zone,
+  puis le déplace vers la zone liée et lui envoie un nouveau `zone.snapshot`.
+- Le `zone.snapshot` porte désormais le **palier**, l'indicateur PvP, et la liste
+  des **portails** de la zone (id, position, destination) — le client les affiche
+  et le joueur clique dessus.
+- **Réapparition cross-zone** : à la mort, l'acteur de zone applique la pénalité
+  d'XP du palier, récompense le vainqueur, retire le perdant, et demande à sa
+  session de le relocaliser dans son village (via l'interface `zone.Client`) —
+  proprement, sans verrou ni interblocage entre acteurs.
+- **Persistance** : position, zone, PV et XP sont sauvegardés à chaque transition
+  et à la déconnexion (write-back complet en T8).
+
+**Validé de bout en bout** (PostgreSQL 16 + Redis 7) :
+- chaîne complète de transitions **village → vert → orange → rouge** via portails
+  et barrière ;
+- création de personnage avec **bonus de stat** (Feu → force 15) ;
+- combat en orange : **initiative à l'agilité** (Eau frappe en premier), dégâts
+  gouvernés par les stats, **mort → réapparition au Village de l'Eau**, **−½ XP**
+  (100 → 50) persistée, vainqueur récompensé (+50 XP).
+
+> Portée : les mobs PvE et le gain d'XP hors combat viendront plus tard ; l'XP se
+> gagne pour l'instant en remportant un combat.
 
 ## Démarrage rapide
 

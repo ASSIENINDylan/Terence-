@@ -22,6 +22,9 @@ const (
 	// TypeMoveIntent est l'intention de déplacement envoyée par le client (T4).
 	// Le serveur ne reçoit qu'une direction ; il reste seul maître de la position.
 	TypeMoveIntent = "move.intent"
+	// TypeZoneTransition : le client emprunte un portail/barrière (link_id) pour
+	// changer de zone. Le serveur valide et déplace le joueur.
+	TypeZoneTransition = "zone.transition"
 	// TypeZoneDelta diffuse les changements d'une zone à chaque tick (T4) :
 	// arrivées, déplacements, départs.
 	TypeZoneDelta = "zone.delta"

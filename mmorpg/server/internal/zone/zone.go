@@ -1,17 +1,13 @@
 // Package zone gère l'état vivant des zones (§4, §9).
 //
 // Chaque zone est un ACTEUR : une unique goroutine possède tout son état
-// (présences, positions, combats) et le fait évoluer à chaque tick. Toutes les
-// interactions (entrer, sortir, bouger, agir en combat) sont des commandes
-// déposées dans une mailbox et exécutées par cette goroutine — donc sans verrou.
+// (présences, positions, combats) et le fait évoluer à chaque tick — sans verrou.
 //
 //   - T3 : entrée en zone et snapshot.
 //   - T4 : boucle de tick + mouvement autoritatif + deltas.
-//   - T5 : combat au tour par tour déclenché par la rencontre de deux
-//     personnages de factions opposées dans une zone PvP (voir combat.go).
-//
-// La perte de cet état (redémarrage) n'entraîne aucune perte durable : les
-// positions de départ sont reprises depuis PostgreSQL (write-back en T8).
+//   - T5 : combat au tour par tour déclenché par la rencontre (combat.go).
+//   - Monde à paliers : transitions entre zones par portails/barrières, PvP et
+//     pénalité d'XP à la mort selon le palier de la zone, réapparition au village.
 package zone
 
 import (
@@ -24,24 +20,69 @@ import (
 )
 
 const (
-	moveSpeedPerSec = 48  // vitesse d'un personnage (unités/s)
-	worldBound      = 480 // limites de la zone : positions bornées à ±worldBound
+	moveSpeedPerSec = 48
+	worldBound      = 480
 	mailboxSize     = 256
 
-	encounterRadius = 12 // distance d'engagement d'un combat (unités)
-	turnTimeoutSec  = 15 // délai max d'un tour avant attaque automatique
-	engageCooldown  = 3  // secondes d'immunité après un combat (anti-re-engagement)
+	encounterRadius  = 12
+	turnTimeoutSec   = 15
+	engageCooldown   = 3
+	transitionRadius = 45 // distance max d'un portail pour l'emprunter
+	combatXPReward   = 50 // XP gagnée en remportant un combat PvP
 )
 
-// Sender est ce dont une zone a besoin pour pousser des messages à un joueur.
+// Sender pousse un message à un joueur.
 type Sender interface {
 	SendEnvelope(msgType string, seq uint64, data any)
+}
+
+// Client est ce qu'une zone connaît d'un joueur connecté : de quoi lui envoyer
+// des messages et le relocaliser (réapparition au village après la mort). La
+// session de la gateway le satisfait.
+type Client interface {
+	Sender
+	// Relocate demande le placement du joueur dans une autre zone (non bloquant
+	// pour la zone appelante).
+	Relocate(char domain.Character)
 }
 
 // Intent est une intention de déplacement (direction, chaque axe dans {-1,0,1}).
 type Intent struct {
 	DX int `json:"dx"`
 	DY int `json:"dy"`
+}
+
+// Portal est un point de transition exposé au client dans le snapshot.
+type Portal struct {
+	LinkID int    `json:"link_id"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Kind   string `json:"kind"` // portal | barrier
+	ToZone string `json:"to_zone"`
+}
+
+// ZoneMeta décrit les attributs statiques d'une zone, calculés au démarrage.
+type ZoneMeta struct {
+	ID          int
+	Code        string
+	Name        string
+	Tier        string // village | green | orange | red
+	PvP         bool
+	DeathXPLoss float64 // fraction d'XP perdue à la mort (0, 0.5, 1)
+	Portals     []Portal
+}
+
+// Link est un lien de transition entre deux zones.
+type Link struct {
+	ID         int
+	FromZoneID int
+	ToZoneID   int
+	Kind       string
+	FromX      int
+	FromY      int
+	ToX        int
+	ToY        int
+	MinLevel   int
 }
 
 // EntityState est la représentation réseau d'une entité (§10).
@@ -63,11 +104,16 @@ func entityStateOf(c domain.Character) EntityState {
 	}
 }
 
-// SnapshotData est l'état complet d'une zone, envoyé à l'entrée (T3).
+// SnapshotData est l'état complet d'une zone, envoyé à l'entrée (T3) et après
+// chaque transition.
 type SnapshotData struct {
 	ZoneID   int           `json:"zone_id"`
+	ZoneName string        `json:"zone_name"`
+	Tier     string        `json:"tier"`
+	PvP      bool          `json:"pvp"`
 	Self     string        `json:"self"`
 	Entities []EntityState `json:"entities"`
+	Portals  []Portal      `json:"portals,omitempty"`
 	Tick     uint64        `json:"tick"`
 }
 
@@ -89,21 +135,20 @@ type DeltaData struct {
 // member est l'état vivant d'un personnage présent dans une zone.
 type member struct {
 	char   domain.Character
-	sender Sender
+	client Client
 	intent Intent
 
-	combatID      string // "" = libre de se déplacer ; sinon en combat
-	cooldownUntil uint64 // tick avant lequel aucun nouveau combat ne peut s'engager
+	combatID      string
+	cooldownUntil uint64
 }
 
 func (m *member) inCombat() bool { return m.combatID != "" }
 
 // Zone est un acteur : sa goroutine loop() possède tout l'état ci-dessous.
 type Zone struct {
-	id   int
+	meta ZoneMeta
 	hz   int
 	step int
-	pvp  bool
 
 	cmds chan func()
 	quit chan struct{}
@@ -112,9 +157,9 @@ type Zone struct {
 	combats map[string]*combat
 	combatN int
 
-	joined []string        // ids entrés depuis le dernier tick
-	left   []string        // ids sortis depuis le dernier tick
-	dirty  map[string]bool // positions changées hors mouvement (respawns)
+	joined []string
+	left   []string
+	dirty  map[string]bool
 
 	tick             uint64
 	turnTimeoutTicks uint64
@@ -122,13 +167,13 @@ type Zone struct {
 	rng              *rand.Rand
 }
 
-func newZone(id, hz int, pvp bool) *Zone {
+func newZone(meta ZoneMeta, hz int) *Zone {
 	step := moveSpeedPerSec / hz
 	if step < 1 {
 		step = 1
 	}
 	z := &Zone{
-		id: id, hz: hz, step: step, pvp: pvp,
+		meta: meta, hz: hz, step: step,
 		cmds:    make(chan func(), mailboxSize),
 		quit:    make(chan struct{}),
 		members: make(map[string]*member),
@@ -137,7 +182,7 @@ func newZone(id, hz int, pvp bool) *Zone {
 
 		turnTimeoutTicks: uint64(turnTimeoutSec * hz),
 		cooldownTicks:    uint64(engageCooldown * hz),
-		rng:              rand.New(rand.NewSource(int64(id)*7919 + time.Now().UnixNano())),
+		rng:              rand.New(rand.NewSource(int64(meta.ID)*7919 + time.Now().UnixNano())),
 	}
 	go z.loop()
 	return z
@@ -158,12 +203,9 @@ func (z *Zone) loop() {
 	}
 }
 
-// doTick fait avancer le temps : mouvement, tours de combat en dépassement de
-// délai, détection des rencontres, puis diffusion du zone.delta.
 func (z *Zone) doTick() {
 	z.tick++
 
-	// 1. Mouvement autoritatif (les personnages en combat ne bougent pas).
 	var moved []MovedEntity
 	for id, m := range z.members {
 		if m.inCombat() || (m.intent.DX == 0 && m.intent.DY == 0) {
@@ -177,10 +219,8 @@ func (z *Zone) doTick() {
 		}
 	}
 
-	// 2. Tours de combat expirés → attaque automatique du joueur passif.
 	z.resolveTimedOutTurns()
 
-	// 3. Positions changées par un respawn → à diffuser aussi.
 	for id := range z.dirty {
 		if m, ok := z.members[id]; ok {
 			moved = append(moved, MovedEntity{CharacterID: id, X: m.char.X, Y: m.char.Y})
@@ -188,10 +228,8 @@ func (z *Zone) doTick() {
 		delete(z.dirty, id)
 	}
 
-	// 4. Rencontres → engagement de combats.
 	z.detectEncounters()
 
-	// 5. Diffusion du delta.
 	var joined []EntityState
 	for _, id := range z.joined {
 		if m, ok := z.members[id]; ok {
@@ -206,23 +244,29 @@ func (z *Zone) doTick() {
 	}
 	delta := DeltaData{Tick: z.tick, Joined: joined, Moved: moved, Left: left}
 	for _, m := range z.members {
-		m.sender.SendEnvelope(protocol.TypeZoneDelta, 0, delta)
+		m.client.SendEnvelope(protocol.TypeZoneDelta, 0, delta)
 	}
 }
 
-// ── Commandes (exécutées dans la goroutine de la zone) ──────────────────────
+// ── Commandes ───────────────────────────────────────────────────────────────
 
-func (z *Zone) enter(char domain.Character, sender Sender) SnapshotData {
+func (z *Zone) snapshotFor(charID string) SnapshotData {
+	entities := make([]EntityState, 0, len(z.members))
+	for _, m := range z.members {
+		entities = append(entities, entityStateOf(m.char))
+	}
+	return SnapshotData{
+		ZoneID: z.meta.ID, ZoneName: z.meta.Name, Tier: z.meta.Tier, PvP: z.meta.PvP,
+		Self: charID, Entities: entities, Portals: z.meta.Portals, Tick: z.tick,
+	}
+}
+
+func (z *Zone) enter(char domain.Character, client Client) SnapshotData {
 	reply := make(chan SnapshotData, 1)
 	z.cmds <- func() {
-		z.members[char.ID] = &member{char: char, sender: sender}
+		z.members[char.ID] = &member{char: char, client: client}
 		z.joined = append(z.joined, char.ID)
-
-		entities := make([]EntityState, 0, len(z.members))
-		for _, m := range z.members {
-			entities = append(entities, entityStateOf(m.char))
-		}
-		reply <- SnapshotData{ZoneID: z.id, Self: char.ID, Entities: entities, Tick: z.tick}
+		reply <- z.snapshotFor(char.ID)
 	}
 	return <-reply
 }
@@ -233,7 +277,6 @@ func (z *Zone) leave(charID string) {
 		if m == nil {
 			return
 		}
-		// Un départ en plein combat met fin au combat (forfait).
 		if m.inCombat() {
 			if c := z.combats[m.combatID]; c != nil {
 				z.endByForfeit(c, charID)
@@ -253,7 +296,6 @@ func (z *Zone) move(charID string, in Intent) {
 	}
 }
 
-// combatAction traite l'action du joueur actif (voir combat.go).
 func (z *Zone) combatAction(charID, action string) {
 	z.cmds <- func() {
 		m := z.members[charID]
@@ -265,7 +307,7 @@ func (z *Zone) combatAction(charID, action string) {
 			return
 		}
 		if c.turn != charID {
-			m.sender.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
+			m.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
 				Code: "not_your_turn", Message: "ce n'est pas ton tour",
 			})
 			return
@@ -283,26 +325,50 @@ func (z *Zone) count() int {
 	return <-reply
 }
 
+// currentChar retourne l'état autoritatif d'un personnage présent dans la zone
+// (position, PV, XP à jour), possédé par la goroutine de la zone.
+func (z *Zone) currentChar(charID string) (domain.Character, bool) {
+	type result struct {
+		c  domain.Character
+		ok bool
+	}
+	reply := make(chan result, 1)
+	z.cmds <- func() {
+		if m := z.members[charID]; m != nil {
+			reply <- result{m.char, true}
+		} else {
+			reply <- result{domain.Character{}, false}
+		}
+	}
+	r := <-reply
+	return r.c, r.ok
+}
+
 // ── Gestionnaire de zones ───────────────────────────────────────────────────
 
-// Manager détient toutes les zones actives et route les commandes.
+// Manager détient toutes les zones actives, leurs métadonnées et les liens de
+// transition.
 type Manager struct {
 	hz    int
-	pvp   map[int]bool // zones où le combat est autorisé
+	metas map[int]ZoneMeta
+	links map[int]Link
 	mu    sync.Mutex
 	zones map[int]*Zone
 }
 
-// NewManager crée un gestionnaire de zones. hz est la fréquence de tick ; pvp
-// indique, par identifiant de zone, si le combat y est autorisé.
-func NewManager(hz int, pvp map[int]bool) *Manager {
+// NewManager crée le gestionnaire à partir des métadonnées de zones et des liens
+// de transition (chargés au démarrage).
+func NewManager(hz int, metas map[int]ZoneMeta, links map[int]Link) *Manager {
 	if hz <= 0 {
 		hz = 1
 	}
-	if pvp == nil {
-		pvp = map[int]bool{}
+	if metas == nil {
+		metas = map[int]ZoneMeta{}
 	}
-	return &Manager{hz: hz, pvp: pvp, zones: make(map[int]*Zone)}
+	if links == nil {
+		links = map[int]Link{}
+	}
+	return &Manager{hz: hz, metas: metas, links: links, zones: make(map[int]*Zone)}
 }
 
 func (m *Manager) zoneFor(id int) *Zone {
@@ -310,7 +376,11 @@ func (m *Manager) zoneFor(id int) *Zone {
 	defer m.mu.Unlock()
 	z, ok := m.zones[id]
 	if !ok {
-		z = newZone(id, m.hz, m.pvp[id])
+		meta, has := m.metas[id]
+		if !has {
+			meta = ZoneMeta{ID: id, Name: "Zone inconnue", Tier: "green"}
+		}
+		z = newZone(meta, m.hz)
 		m.zones[id] = z
 	}
 	return z
@@ -322,9 +392,9 @@ func (m *Manager) lookup(id int) *Zone {
 	return m.zones[id]
 }
 
-// Enter place un personnage dans sa zone et retourne le snapshot à lui envoyer.
-func (m *Manager) Enter(char domain.Character, sender Sender) SnapshotData {
-	return m.zoneFor(char.ZoneID).enter(char, sender)
+// Enter place un personnage dans sa zone et retourne le snapshot.
+func (m *Manager) Enter(char domain.Character, client Client) SnapshotData {
+	return m.zoneFor(char.ZoneID).enter(char, client)
 }
 
 // Leave retire un personnage de sa zone (idempotent).
@@ -341,11 +411,64 @@ func (m *Manager) Move(char domain.Character, in Intent) {
 	}
 }
 
-// CombatAction transmet l'action de combat d'un personnage à sa zone (T5).
+// CombatAction transmet l'action de combat d'un personnage à sa zone.
 func (m *Manager) CombatAction(char domain.Character, action string) {
 	if z := m.lookup(char.ZoneID); z != nil {
 		z.combatAction(char.ID, action)
 	}
+}
+
+// TransitionError décrit pourquoi une transition a été refusée.
+type TransitionError struct {
+	Code    string
+	Message string
+}
+
+func (e *TransitionError) Error() string { return e.Message }
+
+// Transition emprunte un lien (portail/barrière) depuis la zone courante du
+// personnage. Retourne le personnage relocalisé et le snapshot de la nouvelle
+// zone. Appelé depuis la goroutine de la session (client-initié).
+func (m *Manager) Transition(char domain.Character, linkID int, client Client) (domain.Character, SnapshotData, error) {
+	m.mu.Lock()
+	link, ok := m.links[linkID]
+	m.mu.Unlock()
+	if !ok {
+		return char, SnapshotData{}, &TransitionError{"unknown_link", "portail inconnu"}
+	}
+	if link.FromZoneID != char.ZoneID {
+		return char, SnapshotData{}, &TransitionError{"wrong_zone", "ce portail n'est pas dans ta zone"}
+	}
+
+	// La position (et l'XP) autoritatives vivent dans l'acteur de zone : on les
+	// relit avant de valider la proximité au portail.
+	if z := m.lookup(char.ZoneID); z != nil {
+		if cur, present := z.currentChar(char.ID); present {
+			char = cur
+		}
+	}
+
+	if dx, dy := char.X-link.FromX, char.Y-link.FromY; dx*dx+dy*dy > transitionRadius*transitionRadius {
+		return char, SnapshotData{}, &TransitionError{"too_far", "approche-toi du portail"}
+	}
+	if char.Level < link.MinLevel {
+		return char, SnapshotData{}, &TransitionError{"level_too_low", "niveau insuffisant pour cette barrière"}
+	}
+
+	m.Leave(char)
+	char.ZoneID = link.ToZoneID
+	char.X, char.Y = link.ToX, link.ToY
+	snap := m.Enter(char, client)
+	return char, snap, nil
+}
+
+// CurrentChar retourne l'état autoritatif d'un personnage dans sa zone (position,
+// PV, XP), ou le personnage inchangé s'il n'y est plus présent.
+func (m *Manager) CurrentChar(char domain.Character) (domain.Character, bool) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		return z.currentChar(char.ID)
+	}
+	return char, false
 }
 
 // Count retourne le nombre de personnages présents dans une zone.

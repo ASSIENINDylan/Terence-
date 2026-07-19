@@ -27,21 +27,24 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (accountID int64, err error)
 }
 
-// CharacterStore charge (ou crée) le personnage persistant d'un compte.
+// CharacterStore charge, crée et persiste le personnage d'un compte.
 // store.Store satisfait cette interface.
 type CharacterStore interface {
-	GetOrCreateForAccount(ctx context.Context, accountID int64) (domain.Character, error)
+	GetOrCreateForAccount(ctx context.Context, accountID int64, element string) (domain.Character, error)
+	SaveState(ctx context.Context, char domain.Character) error
 	TouchLastPlayed(ctx context.Context, characterID string) error
 }
 
-// World place les personnages dans leur zone, en produit les snapshots et
-// applique leurs intentions de déplacement. zone.Manager satisfait cette
-// interface.
+// World place les personnages dans leur zone, en produit les snapshots, applique
+// leurs déplacements et gère les transitions de zone. zone.Manager satisfait
+// cette interface.
 type World interface {
-	Enter(char domain.Character, sender zone.Sender) zone.SnapshotData
+	Enter(char domain.Character, client zone.Client) zone.SnapshotData
 	Leave(char domain.Character)
 	Move(char domain.Character, in zone.Intent)
 	CombatAction(char domain.Character, action string)
+	Transition(char domain.Character, linkID int, client zone.Client) (domain.Character, zone.SnapshotData, error)
+	CurrentChar(char domain.Character) (domain.Character, bool)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -101,18 +104,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Handshake applicatif : on confirme l'authentification au client.
 	conn.SendEnvelope(protocol.TypeAuthOK, 0, map[string]any{"account_id": accountID})
 
-	// Entrée en jeu (T3) : charger le personnage persistant, l'entrer dans sa
-	// zone, et lui envoyer l'état initial. Un échec ici ferme proprement la
-	// connexion plutôt que de laisser le joueur dans un état incohérent.
-	char, ok := g.enterWorld(r.Context(), conn, accountID)
+	// Entrée en jeu : charger le personnage persistant. L'élément de départ
+	// (feu/eau/terre) peut être choisi au premier accès via ?element=.
+	element := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("element")))
+	char, ok := g.loadCharacter(r.Context(), conn, accountID, element)
 	if !ok {
 		_ = ws.Close()
 		return
 	}
-	defer g.world.Leave(char)
 
-	// run bloque jusqu'à la fermeture de la connexion (lecture/écriture).
-	conn.run(g.gameHandler(conn, char))
+	// La session sérialise les changements de zone (transitions, réapparitions).
+	s := newSession(g, conn, accountID, char)
+	snap := g.world.Enter(char, s)
+	conn.SendEnvelope(protocol.TypeZoneSnapshot, 0, snap)
+	g.log.Info("entrée en zone", "character_id", char.ID, "zone_id", char.ZoneID, "présents", len(snap.Entities))
+
+	// run bloque jusqu'à la fermeture ; il retire ensuite le joueur et sauvegarde.
+	s.run()
 	g.log.Info("connexion WebSocket fermée", "account_id", accountID, "character_id", char.ID)
 }
 
@@ -127,49 +135,18 @@ type combatActionPayload struct {
 	Action string `json:"action"` // "attack" | "flee"
 }
 
-// gameHandler construit le routage des messages de jeu pour une connexion et son
-// personnage. En T4 : les intentions de déplacement (le reste reste en écho,
-// hérité de T2, pour les types non encore gérés).
-func (g *Gateway) gameHandler(conn *Conn, char domain.Character) func(protocol.Envelope) {
-	return func(env protocol.Envelope) {
-		switch env.Type {
-		case protocol.TypeMoveIntent:
-			var mi moveIntentPayload
-			if err := env.DecodeData(&mi); err != nil {
-				conn.SendEnvelope(protocol.TypeError, env.Seq, protocol.ErrorData{
-					Code:    "invalid_move_intent",
-					Message: "intention de déplacement mal formée",
-				})
-				return
-			}
-			// Le serveur ne retient que la direction ; il reste maître de la
-			// position (application autoritative au prochain tick).
-			g.world.Move(char, zone.Intent{DX: mi.DX, DY: mi.DY})
-		case protocol.TypeCombatAction:
-			var ca combatActionPayload
-			if err := env.DecodeData(&ca); err != nil {
-				conn.SendEnvelope(protocol.TypeError, env.Seq, protocol.ErrorData{
-					Code:    "invalid_combat_action",
-					Message: "action de combat mal formée",
-				})
-				return
-			}
-			g.world.CombatAction(char, ca.Action)
-		default:
-			// Types non encore gérés : écho (hérité de T2).
-			conn.SendEnvelope(protocol.TypeEcho, env.Seq, env.Data)
-		}
-	}
+// transitionPayload est la charge utile d'un message zone.transition.
+type transitionPayload struct {
+	LinkID int `json:"link_id"`
 }
 
-// enterWorld charge le personnage du compte, le place dans sa zone et lui envoie
-// le zone.snapshot. Retourne false si l'entrée échoue (le personnage n'est alors
-// pas dans le monde).
-func (g *Gateway) enterWorld(reqCtx context.Context, conn *Conn, accountID int64) (domain.Character, bool) {
+// loadCharacter charge (ou crée) le personnage du compte. Retourne false si le
+// chargement échoue.
+func (g *Gateway) loadCharacter(reqCtx context.Context, conn *Conn, accountID int64, element string) (domain.Character, bool) {
 	ctx, cancel := context.WithTimeout(reqCtx, 5*time.Second)
 	defer cancel()
 
-	char, err := g.characters.GetOrCreateForAccount(ctx, accountID)
+	char, err := g.characters.GetOrCreateForAccount(ctx, accountID, element)
 	if err != nil {
 		g.log.Error("chargement du personnage échoué", "account_id", accountID, "err", err)
 		conn.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
@@ -178,13 +155,7 @@ func (g *Gateway) enterWorld(reqCtx context.Context, conn *Conn, accountID int64
 		})
 		return domain.Character{}, false
 	}
-
-	// Trace la session ; non bloquant pour l'entrée en jeu.
 	_ = g.characters.TouchLastPlayed(ctx, char.ID)
-
-	snap := g.world.Enter(char, conn)
-	conn.SendEnvelope(protocol.TypeZoneSnapshot, 0, snap)
-	g.log.Info("entrée en zone", "character_id", char.ID, "zone_id", char.ZoneID, "présents", len(snap.Entities))
 	return char, true
 }
 

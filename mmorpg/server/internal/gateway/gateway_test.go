@@ -31,18 +31,19 @@ func (f fakeAuth) Authenticate(_ context.Context, token string) (int64, error) {
 // fakeCharacters renvoie un personnage déterministe pour le compte.
 type fakeCharacters struct{}
 
-func (fakeCharacters) GetOrCreateForAccount(_ context.Context, accountID int64) (domain.Character, error) {
+func (fakeCharacters) GetOrCreateForAccount(_ context.Context, accountID int64, _ string) (domain.Character, error) {
 	return domain.Character{
 		ID: "char-42", AccountID: accountID, Name: "Testeur",
-		FactionID: 1, Level: 1, HP: 100, MaxHP: 100, ZoneID: 7, X: 0, Y: 0,
+		FactionID: 1, Level: 1, HP: 100, MaxHP: 100, ZoneID: 7, HomeZoneID: 7, X: 0, Y: 0,
 	}, nil
 }
-func (fakeCharacters) TouchLastPlayed(context.Context, string) error { return nil }
+func (fakeCharacters) SaveState(context.Context, domain.Character) error { return nil }
+func (fakeCharacters) TouchLastPlayed(context.Context, string) error     { return nil }
 
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	world := zone.NewManager(12, nil)
+	world := zone.NewManager(12, nil, nil)
 	t.Cleanup(world.Close)
 	gw := New(fakeAuth{good: "valid-token"}, fakeCharacters{}, world, log)
 	srv := httptest.NewServer(gw)
