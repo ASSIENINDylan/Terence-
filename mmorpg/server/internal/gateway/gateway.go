@@ -34,11 +34,13 @@ type CharacterStore interface {
 	TouchLastPlayed(ctx context.Context, characterID string) error
 }
 
-// World place les personnages dans leur zone et en produit les snapshots.
-// zone.Manager satisfait cette interface.
+// World place les personnages dans leur zone, en produit les snapshots et
+// applique leurs intentions de déplacement. zone.Manager satisfait cette
+// interface.
 type World interface {
 	Enter(char domain.Character, sender zone.Sender) zone.SnapshotData
 	Leave(char domain.Character)
+	Move(char domain.Character, in zone.Intent)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -109,8 +111,39 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer g.world.Leave(char)
 
 	// run bloque jusqu'à la fermeture de la connexion (lecture/écriture).
-	conn.run()
+	conn.run(g.gameHandler(conn, char))
 	g.log.Info("connexion WebSocket fermée", "account_id", accountID, "character_id", char.ID)
+}
+
+// moveIntentPayload est la charge utile attendue d'un message move.intent (T4).
+type moveIntentPayload struct {
+	DX int `json:"dx"`
+	DY int `json:"dy"`
+}
+
+// gameHandler construit le routage des messages de jeu pour une connexion et son
+// personnage. En T4 : les intentions de déplacement (le reste reste en écho,
+// hérité de T2, pour les types non encore gérés).
+func (g *Gateway) gameHandler(conn *Conn, char domain.Character) func(protocol.Envelope) {
+	return func(env protocol.Envelope) {
+		switch env.Type {
+		case protocol.TypeMoveIntent:
+			var mi moveIntentPayload
+			if err := env.DecodeData(&mi); err != nil {
+				conn.SendEnvelope(protocol.TypeError, env.Seq, protocol.ErrorData{
+					Code:    "invalid_move_intent",
+					Message: "intention de déplacement mal formée",
+				})
+				return
+			}
+			// Le serveur ne retient que la direction ; il reste maître de la
+			// position (application autoritative au prochain tick).
+			g.world.Move(char, zone.Intent{DX: mi.DX, DY: mi.DY})
+		default:
+			// Types non encore gérés : écho (hérité de T2).
+			conn.SendEnvelope(protocol.TypeEcho, env.Seq, env.Data)
+		}
+	}
 }
 
 // enterWorld charge le personnage du compte, le place dans sa zone et lui envoie

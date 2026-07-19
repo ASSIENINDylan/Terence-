@@ -19,6 +19,12 @@ const (
 	TypeAuthOK = "auth.ok"
 	// TypeZoneSnapshot porte l'état initial d'une zone à l'entrée du joueur (T3).
 	TypeZoneSnapshot = "zone.snapshot"
+	// TypeMoveIntent est l'intention de déplacement envoyée par le client (T4).
+	// Le serveur ne reçoit qu'une direction ; il reste seul maître de la position.
+	TypeMoveIntent = "move.intent"
+	// TypeZoneDelta diffuse les changements d'une zone à chaque tick (T4) :
+	// arrivées, déplacements, départs.
+	TypeZoneDelta = "zone.delta"
 	// TypeEcho est renvoyé par le serveur en écho d'un message reçu (T2).
 	TypeEcho = "echo"
 	// TypeError signale une erreur applicative sur la connexion.

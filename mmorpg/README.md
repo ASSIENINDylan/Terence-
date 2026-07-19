@@ -20,7 +20,7 @@ build `T0 → T8` du plan technique.
 | **T1** | Comptes + login HTTP + token de session Redis. | ✅ **fait** |
 | **T2** | WebSocket + Gateway : handshake authentifié, écho. | ✅ **fait** |
 | **T3** | Personnage persistant + entrée en zone + `zone.snapshot`. | ✅ **fait** |
-| T4 | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | à venir |
+| **T4** | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | ✅ **fait** |
 | T5 | Combat autoritatif (auto-attaque + PV + mort + respawn). | à venir |
 | T6 | Inventaire : templates + exemplaires, ramasser/équiper/utiliser. | à venir |
 | T7 | Chat (global + faction) via pub/sub Redis + appartenance village. | à venir |
@@ -139,6 +139,42 @@ présentes. »* ✅ — vérifié de bout en bout : deux comptes rejoignent la z
 départ (le 2ᵉ voit bien les deux personnages), état persisté en base
 (`last_played_at` inclus), et reconnexion sur le même personnage.
 
+## T4 — ce qui est livré
+
+Le monde se met à vivre : mouvement autoritatif en temps réel.
+
+- **La zone devient un acteur** (`internal/zone`) : une unique goroutine possède
+  tout l'état de la zone (présences, positions) et le fait évoluer à chaque
+  **tick** (fréquence `TICK_HZ`, 12 Hz par défaut). Plus de verrou : toutes les
+  interactions (entrer, sortir, bouger) sont des commandes traitées en série par
+  cette goroutine — pas de course de données (vérifié au détecteur `-race`).
+- **`move.intent`** (client → serveur) : le client n'envoie qu'une **direction**
+  (`{dx, dy}`, chaque axe borné à −1/0/1). Il ne transmet jamais de position.
+- **Mouvement autoritatif** : à chaque tick, le serveur applique la direction à
+  sa propre vitesse, borne la position aux limites de la zone, et reste seul
+  maître des coordonnées. Un client ne peut pas « accélérer » en trichant sur
+  l'amplitude.
+- **`zone.delta`** (serveur → clients) : à chaque tick, la zone diffuse ses
+  changements — **déplacements**, **arrivées** et **départs**. C'est aussi ce qui
+  fait qu'un joueur voit désormais les autres entrer, bouger et quitter la zone
+  en direct (ce que le `zone.snapshot` de T3 ne donnait qu'à l'entrée).
+
+```
+Client ── {"type":"move.intent","data":{"dx":1,"dy":0}} ──▶ serveur
+   (à chaque tick, positions recalculées côté serveur)
+serveur ── {"type":"zone.delta","data":{"tick":N,"moved":[{"character_id":"…","x":8,"y":0}]}} ──▶ tous les clients de la zone
+```
+
+> Note : les positions vivent en mémoire pendant la session. Leur persistance
+> périodique (write-back) et le flush à la déconnexion arrivent en **T8** ; pour
+> l'instant, une reconnexion repart du point d'apparition.
+
+**Critère de validation T4** : *« Un joueur envoie move.intent ; le serveur
+applique le déplacement de façon autoritative à chaque tick et diffuse un
+zone.delta aux joueurs de la zone. »* ✅ — vérifié de bout en bout : J1 envoie une
+intention, le serveur avance sa position tick par tick (x = 4, 8, 12, …), et J2
+reçoit les `zone.delta` correspondants en continu.
+
 ## Démarrage rapide
 
 ### Avec docker compose (recommandé)
@@ -246,7 +282,7 @@ mmorpg/
       httpapi/                  # API HTTP : health check + auth + route /ws
       gateway/                  # WebSocket : handshake, entrée en jeu, Conn
       protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation
-      zone/                     # zones en mémoire : présences, snapshot (T3 ; tick T4)
+      zone/                     # zones-acteurs : tick, présences, mouvement, deltas (T3/T4)
       domain/                   # entités métier : character (T3), item… (T6)
     migrations/                 # SQL versionné, embarqué dans le binaire
       0001_init.sql

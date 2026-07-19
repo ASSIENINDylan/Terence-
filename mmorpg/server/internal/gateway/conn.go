@@ -70,17 +70,18 @@ func (c *Conn) close() {
 }
 
 // run lance les deux pumps et bloque jusqu'à la fermeture de la connexion.
-func (c *Conn) run() {
+// handle traite chaque message applicatif décodé (routage de jeu).
+func (c *Conn) run(handle func(protocol.Envelope)) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); c.writePump() }()
-	go func() { defer wg.Done(); c.readPump() }()
+	go func() { defer wg.Done(); c.readPump(handle) }()
 	wg.Wait()
 }
 
 // readPump lit les messages entrants et les traite. Il possède exclusivement la
 // lecture de la socket. Toute erreur de lecture termine la connexion.
-func (c *Conn) readPump() {
+func (c *Conn) readPump(handle func(protocol.Envelope)) {
 	defer c.close()
 
 	c.ws.SetReadLimit(maxMessageSize)
@@ -97,30 +98,23 @@ func (c *Conn) readPump() {
 			}
 			return
 		}
-		c.handleMessage(raw)
-	}
-}
 
-// handleMessage traite un message entrant. En T2, tout message valide est
-// renvoyé en écho (en préservant son numéro de séquence) ; un message invalide
-// reçoit une enveloppe d'erreur. C'est le point d'extension du routage de jeu
-// (move.intent, chat.send… T3+).
-func (c *Conn) handleMessage(raw []byte) {
-	env, err := protocol.Decode(raw)
-	if err != nil {
-		c.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
-			Code:    "invalid_message",
-			Message: "message mal formé",
-		})
-		return
-	}
+		env, err := protocol.Decode(raw)
+		if err != nil {
+			c.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
+				Code:    "invalid_message",
+				Message: "message mal formé",
+			})
+			continue
+		}
 
-	switch env.Type {
-	case protocol.TypePing:
-		c.SendEnvelope(protocol.TypePong, env.Seq, nil)
-	default:
-		// Écho : on renvoie la charge utile reçue telle quelle (T2).
-		c.SendEnvelope(protocol.TypeEcho, env.Seq, env.Data)
+		// Le ping/pong est traité au niveau du transport ; le reste est confié
+		// au routage de jeu fourni par la gateway.
+		if env.Type == protocol.TypePing {
+			c.SendEnvelope(protocol.TypePong, env.Seq, nil)
+			continue
+		}
+		handle(env)
 	}
 }
 

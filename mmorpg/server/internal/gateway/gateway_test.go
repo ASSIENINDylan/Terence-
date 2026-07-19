@@ -42,7 +42,9 @@ func (fakeCharacters) TouchLastPlayed(context.Context, string) error { return ni
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	gw := New(fakeAuth{good: "valid-token"}, fakeCharacters{}, zone.NewManager(), log)
+	world := zone.NewManager(12)
+	t.Cleanup(world.Close)
+	gw := New(fakeAuth{good: "valid-token"}, fakeCharacters{}, world, log)
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")

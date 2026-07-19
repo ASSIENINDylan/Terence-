@@ -76,8 +76,9 @@ func run(logger *slog.Logger) error {
 	// de session volatils en Redis.
 	authSvc := auth.NewService(db, rc, cfg.SessionTTL)
 
-	// Monde en mémoire (T3) : registre des zones et des présences.
-	world := zone.NewManager()
+	// Monde en mémoire (T3/T4) : zones-acteurs avec boucle de tick à TICK_HZ.
+	world := zone.NewManager(cfg.TickHz)
+	defer world.Close()
 
 	// Gateway temps réel (T2/T3) : handshake authentifié, puis chargement du
 	// personnage persistant, entrée en zone et envoi du zone.snapshot.
