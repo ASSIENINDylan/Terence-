@@ -9,3 +9,6 @@
 # Artefacts Go
 *.test
 *.out
+
+# Dump Redis (généré si redis-server tourne dans l'arbre du projet)
+dump.rdb

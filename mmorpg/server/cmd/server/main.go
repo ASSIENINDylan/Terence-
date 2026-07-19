@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/assienindylan/terence-/mmorpg/server/internal/auth"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/cache"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/config"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/httpapi"
@@ -69,8 +70,12 @@ func run(logger *slog.Logger) error {
 	defer func() { _ = rc.Close() }()
 	logger.Info("Redis connecté")
 
-	// API HTTP (health check en T0 ; login en T1, WebSocket en T2).
-	api := httpapi.New(db, rc)
+	// Service d'authentification (T1) : comptes durables en PostgreSQL, tokens
+	// de session volatils en Redis.
+	authSvc := auth.NewService(db, rc, cfg.SessionTTL)
+
+	// API HTTP (health check T0, authentification T1 ; WebSocket en T2).
+	api := httpapi.New(db, rc, authSvc)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           api.Handler(),

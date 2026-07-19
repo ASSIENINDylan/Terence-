@@ -27,6 +27,9 @@ type Config struct {
 
 	// StartupTimeout borne le temps d'attente des dépendances au démarrage.
 	StartupTimeout time.Duration
+
+	// SessionTTL est la durée de vie d'un token de session dans Redis (T1).
+	SessionTTL time.Duration
 }
 
 // Load lit la configuration depuis l'environnement, avec des valeurs par
@@ -38,10 +41,14 @@ func Load() (Config, error) {
 		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		TickHz:         getEnvInt("TICK_HZ", 12),
 		StartupTimeout: getEnvDuration("STARTUP_TIMEOUT", 30*time.Second),
+		SessionTTL:     getEnvDuration("SESSION_TTL", 24*time.Hour),
 	}
 
 	if cfg.TickHz <= 0 {
 		return Config{}, fmt.Errorf("TICK_HZ doit être > 0, reçu %d", cfg.TickHz)
+	}
+	if cfg.SessionTTL <= 0 {
+		return Config{}, fmt.Errorf("SESSION_TTL doit être > 0, reçu %s", cfg.SessionTTL)
 	}
 	return cfg, nil
 }

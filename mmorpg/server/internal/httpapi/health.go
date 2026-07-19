@@ -1,6 +1,6 @@
-// Package httpapi expose l'API HTTP du serveur. En v0.1 (T0) elle porte les
-// endpoints de santé ; le login HTTP (T1) et l'upgrade WebSocket (T2) viendront
-// s'y greffer.
+// Package httpapi expose l'API HTTP du serveur. En v0.1 elle porte les
+// endpoints de santé (T0) et l'authentification (T1 : register, login, logout,
+// me) ; l'upgrade WebSocket (T2) viendra s'y greffer.
 package httpapi
 
 import (
@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+
+	"github.com/assienindylan/terence-/mmorpg/server/internal/auth"
 )
 
 // Pinger est une dépendance dont on peut vérifier la disponibilité.
@@ -15,15 +17,16 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
-// Server assemble les handlers HTTP autour des dépendances (DB, cache).
+// Server assemble les handlers HTTP autour des dépendances (DB, cache, auth).
 type Server struct {
 	db    Pinger
 	cache Pinger
+	auth  *auth.Service
 }
 
 // New construit le serveur HTTP avec ses dépendances.
-func New(db, cache Pinger) *Server {
-	return &Server{db: db, cache: cache}
+func New(db, cache Pinger, authSvc *auth.Service) *Server {
+	return &Server{db: db, cache: cache, auth: authSvc}
 }
 
 // Handler retourne le routeur HTTP racine.
@@ -33,6 +36,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", s.handleLiveness)
 	// Readiness : DB et Redis répondent-ils ? Critère de validation de T0.
 	mux.HandleFunc("GET /readyz", s.handleReadiness)
+	// Authentification (T1).
+	mux.HandleFunc("POST /auth/register", s.handleRegister)
+	mux.HandleFunc("POST /auth/login", s.handleLogin)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /auth/me", s.handleMe)
 	return mux
 }
 
