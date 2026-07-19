@@ -17,16 +17,20 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
-// Server assemble les handlers HTTP autour des dépendances (DB, cache, auth).
+// Server assemble les handlers HTTP autour des dépendances (DB, cache, auth,
+// gateway WebSocket).
 type Server struct {
-	db    Pinger
-	cache Pinger
-	auth  *auth.Service
+	db      Pinger
+	cache   Pinger
+	auth    *auth.Service
+	gateway http.Handler
 }
 
-// New construit le serveur HTTP avec ses dépendances.
-func New(db, cache Pinger, authSvc *auth.Service) *Server {
-	return &Server{db: db, cache: cache, auth: authSvc}
+// New construit le serveur HTTP avec ses dépendances. gateway est le handler
+// d'upgrade WebSocket (T2) ; il peut être nil (aucune route /ws n'est alors
+// exposée).
+func New(db, cache Pinger, authSvc *auth.Service, gateway http.Handler) *Server {
+	return &Server{db: db, cache: cache, auth: authSvc, gateway: gateway}
 }
 
 // Handler retourne le routeur HTTP racine.
@@ -41,6 +45,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/login", s.handleLogin)
 	mux.HandleFunc("POST /auth/logout", s.handleLogout)
 	mux.HandleFunc("GET /auth/me", s.handleMe)
+	// Gateway temps réel (T2) : upgrade WebSocket authentifié.
+	if s.gateway != nil {
+		mux.Handle("GET /ws", s.gateway)
+	}
 	return mux
 }
 

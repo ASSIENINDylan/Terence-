@@ -18,6 +18,7 @@ import (
 	"github.com/assienindylan/terence-/mmorpg/server/internal/auth"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/cache"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/config"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/gateway"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/httpapi"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/store"
 )
@@ -74,8 +75,11 @@ func run(logger *slog.Logger) error {
 	// de session volatils en Redis.
 	authSvc := auth.NewService(db, rc, cfg.SessionTTL)
 
-	// API HTTP (health check T0, authentification T1 ; WebSocket en T2).
-	api := httpapi.New(db, rc, authSvc)
+	// Gateway temps réel (T2) : handshake WebSocket authentifié par token.
+	gw := gateway.New(authSvc, logger)
+
+	// API HTTP (health check T0, authentification T1, WebSocket T2).
+	api := httpapi.New(db, rc, authSvc, gw)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           api.Handler(),

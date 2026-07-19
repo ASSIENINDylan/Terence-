@@ -18,7 +18,7 @@ build `T0 → T8` du plan technique.
 |-------|----------|------|
 | **T0** | Squelette : repo, docker compose (postgres+redis), première migration, health check. | ✅ **fait** |
 | **T1** | Comptes + login HTTP + token de session Redis. | ✅ **fait** |
-| T2 | WebSocket + Gateway : handshake authentifié, écho. | à venir |
+| **T2** | WebSocket + Gateway : handshake authentifié, écho. | ✅ **fait** |
 | T3 | Personnage persistant + entrée en zone + `zone.snapshot`. | à venir |
 | T4 | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | à venir |
 | T5 | Combat autoritatif (auto-attaque + PV + mort + respawn). | à venir |
@@ -59,6 +59,7 @@ Authentification des joueurs (§6), branchée sur le squelette T0 :
 | `POST /auth/login` | `{"email","password"}` | `200 {token, token_type, expires_in, account_id}` — `401 invalid_credentials` |
 | `GET /auth/me` | `Authorization: Bearer <token>` | `200 {account_id}` — `401 invalid_token` |
 | `POST /auth/logout` | `Authorization: Bearer <token>` | `204` (idempotent) |
+| `GET /ws` | `?token=` ou `Authorization: Bearer` | Upgrade WebSocket (T2) — `401` si token absent/invalide |
 
 ```bash
 # Créer un compte, se connecter, récupérer le token, l'utiliser.
@@ -71,6 +72,37 @@ curl localhost:8080/auth/me -H "Authorization: Bearer $TOKEN"   # {"account_id":
 **Critère de validation T1** : *« Un joueur peut créer un compte, se connecter,
 et obtenir un token de session vérifiable stocké dans Redis. »* ✅ — vérifié de
 bout en bout (register → login → `/me` → logout révoque le token).
+
+## T2 — ce qui est livré
+
+La gateway temps réel (§3, §5) : une connexion WebSocket authentifiée, avec
+écho.
+
+- **Handshake authentifié** : `GET /ws` valide le token de session (réutilise
+  `auth.Authenticate` de T1) **avant** l'upgrade. Token absent ou invalide ⇒
+  `401`, aucune socket ouverte. Token accepté via en-tête `Authorization: Bearer`
+  (clients natifs) ou paramètre `?token=` (navigateurs).
+- **Enveloppe de protocole** (`internal/protocol`) : tout message est un
+  `{type, seq, data}` JSON. La (dé)sérialisation est isolée pour pouvoir passer
+  au binaire plus tard sans toucher à la logique.
+- **Abstraction `Conn`** (`internal/gateway`) : un `writePump` unique possède
+  l'écriture, un `readPump` la lecture, keepalive ping/pong et coupure des
+  consommateurs lents. C'est la brique que T3+ utilisera pour pousser snapshots
+  et deltas.
+- **Écho** (comportement T2) : tout message valide revient en `echo` (seq et
+  data préservés) ; `ping` → `pong` ; message mal formé → `error`.
+
+```
+Client ──ws://…/ws?token=<token>──▶ Gateway
+       ◀── {"type":"auth.ok","data":{"account_id":1}}
+       ── {"type":"chat.say","seq":9,"data":{"body":"hi"}} ──▶
+       ◀── {"type":"echo","seq":9,"data":{"body":"hi"}}
+```
+
+**Critère de validation T2** : *« Un client peut se connecter en WebSocket avec
+un token valide et échanger des messages ; un token invalide est rejeté. »* ✅ —
+vérifié de bout en bout (401 sans token / token invalide ; `auth.ok` + écho +
+pong avec un vrai token issu de `/auth/login`).
 
 ## Démarrage rapide
 
@@ -127,11 +159,11 @@ mmorpg/
       store/                    # accès PostgreSQL (pool pgx, migrations, comptes)
       cache/                    # accès Redis (sessions, présence, pub/sub)
       auth/                     # comptes, login, tokens de session (T1)
-      httpapi/                  # API HTTP : health check + auth (WS T2)
-      gateway/                  # WebSocket, auth, routage        (T2)
+      httpapi/                  # API HTTP : health check + auth + route /ws
+      gateway/                  # WebSocket : handshake auth, Conn, écho (T2)
+      protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation (T2)
       zone/                     # acteur de zone, tick, combat     (T3+)
       domain/                   # entités : character, item…       (T3+)
-      protocol/                 # enveloppes + (dé)sérialisation   (T2)
     migrations/                 # SQL versionné, embarqué dans le binaire
       0001_init.sql
 ```
