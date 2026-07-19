@@ -17,6 +17,8 @@ import (
 const (
 	// TypeAuthOK confirme un handshake authentifié réussi (T2).
 	TypeAuthOK = "auth.ok"
+	// TypeZoneSnapshot porte l'état initial d'une zone à l'entrée du joueur (T3).
+	TypeZoneSnapshot = "zone.snapshot"
 	// TypeEcho est renvoyé par le serveur en écho d'un message reçu (T2).
 	TypeEcho = "echo"
 	// TypeError signale une erreur applicative sur la connexion.

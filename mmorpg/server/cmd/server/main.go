@@ -21,6 +21,7 @@ import (
 	"github.com/assienindylan/terence-/mmorpg/server/internal/gateway"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/httpapi"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/store"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/zone"
 )
 
 func main() {
@@ -75,10 +76,14 @@ func run(logger *slog.Logger) error {
 	// de session volatils en Redis.
 	authSvc := auth.NewService(db, rc, cfg.SessionTTL)
 
-	// Gateway temps réel (T2) : handshake WebSocket authentifié par token.
-	gw := gateway.New(authSvc, logger)
+	// Monde en mémoire (T3) : registre des zones et des présences.
+	world := zone.NewManager()
 
-	// API HTTP (health check T0, authentification T1, WebSocket T2).
+	// Gateway temps réel (T2/T3) : handshake authentifié, puis chargement du
+	// personnage persistant, entrée en zone et envoi du zone.snapshot.
+	gw := gateway.New(authSvc, db, world, logger)
+
+	// API HTTP (health check T0, authentification T1, WebSocket T2/T3).
 	api := httpapi.New(db, rc, authSvc, gw)
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,

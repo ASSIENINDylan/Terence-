@@ -19,7 +19,7 @@ build `T0 → T8` du plan technique.
 | **T0** | Squelette : repo, docker compose (postgres+redis), première migration, health check. | ✅ **fait** |
 | **T1** | Comptes + login HTTP + token de session Redis. | ✅ **fait** |
 | **T2** | WebSocket + Gateway : handshake authentifié, écho. | ✅ **fait** |
-| T3 | Personnage persistant + entrée en zone + `zone.snapshot`. | à venir |
+| **T3** | Personnage persistant + entrée en zone + `zone.snapshot`. | ✅ **fait** |
 | T4 | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | à venir |
 | T5 | Combat autoritatif (auto-attaque + PV + mort + respawn). | à venir |
 | T6 | Inventaire : templates + exemplaires, ramasser/équiper/utiliser. | à venir |
@@ -104,6 +104,41 @@ un token valide et échanger des messages ; un token invalide est rejeté. »* �
 vérifié de bout en bout (401 sans token / token invalide ; `auth.ok` + écho +
 pong avec un vrai token issu de `/auth/login`).
 
+## T3 — ce qui est livré
+
+Le premier pas « de jeu » : un personnage persistant entre dans une zone et en
+reçoit l'état.
+
+- **Première entité métier** (`internal/domain`) : `Character`, projection
+  vivante d'une ligne `characters`.
+- **Personnage persistant** (`internal/store/characters.go`) : à la connexion,
+  le serveur charge le personnage du compte depuis PostgreSQL, ou en **crée un
+  par défaut** à la première fois (faction par défaut, zone de départ). Une
+  reconnexion recharge le **même** personnage — aucun doublon.
+- **Données de référence** (migration `0002_seed.sql`) : deux factions, une zone
+  de départ sûre, une zone de plaines PvP, un village — le minimum jouable.
+- **Gestionnaire de zones en mémoire** (`internal/zone`) : registre des
+  présences par zone (entrée / sortie / snapshot), protégé pour l'accès
+  concurrent. C'est l'embryon de l'acteur de zone que T4 dotera d'une boucle de
+  tick. Sa perte n'entraîne aucune perte durable (positions reprises de la base).
+- **`zone.snapshot`** : à l'entrée, le joueur reçoit l'état cohérent de sa zone —
+  la liste des entités présentes (dont lui-même), avec seulement ce qu'il a le
+  droit de voir.
+
+À la connexion WebSocket, la séquence est donc : `auth.ok` → chargement du
+personnage → entrée en zone → `zone.snapshot`.
+
+```
+J1 se connecte ─▶ zone.snapshot { entities: [J1] }
+J2 se connecte ─▶ zone.snapshot { entities: [J1, J2] }   (même zone)
+```
+
+**Critère de validation T3** : *« Un joueur connecté charge son personnage
+persistant, entre dans une zone, et reçoit un zone.snapshot des entités
+présentes. »* ✅ — vérifié de bout en bout : deux comptes rejoignent la zone de
+départ (le 2ᵉ voit bien les deux personnages), état persisté en base
+(`last_played_at` inclus), et reconnexion sur le même personnage.
+
 ## Démarrage rapide
 
 ### Avec docker compose (recommandé)
@@ -160,10 +195,10 @@ mmorpg/
       cache/                    # accès Redis (sessions, présence, pub/sub)
       auth/                     # comptes, login, tokens de session (T1)
       httpapi/                  # API HTTP : health check + auth + route /ws
-      gateway/                  # WebSocket : handshake auth, Conn, écho (T2)
-      protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation (T2)
-      zone/                     # acteur de zone, tick, combat     (T3+)
-      domain/                   # entités : character, item…       (T3+)
+      gateway/                  # WebSocket : handshake, entrée en jeu, Conn
+      protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation
+      zone/                     # zones en mémoire : présences, snapshot (T3 ; tick T4)
+      domain/                   # entités métier : character (T3), item… (T6)
     migrations/                 # SQL versionné, embarqué dans le binaire
       0001_init.sql
 ```

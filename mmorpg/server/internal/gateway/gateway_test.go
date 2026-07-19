@@ -13,7 +13,9 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/assienindylan/terence-/mmorpg/server/internal/domain"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/protocol"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/zone"
 )
 
 // fakeAuth valide un unique token « bon » vers un compte fixe.
@@ -26,10 +28,21 @@ func (f fakeAuth) Authenticate(_ context.Context, token string) (int64, error) {
 	return 0, errors.New("invalid")
 }
 
+// fakeCharacters renvoie un personnage déterministe pour le compte.
+type fakeCharacters struct{}
+
+func (fakeCharacters) GetOrCreateForAccount(_ context.Context, accountID int64) (domain.Character, error) {
+	return domain.Character{
+		ID: "char-42", AccountID: accountID, Name: "Testeur",
+		FactionID: 1, Level: 1, HP: 100, MaxHP: 100, ZoneID: 7, X: 0, Y: 0,
+	}, nil
+}
+func (fakeCharacters) TouchLastPlayed(context.Context, string) error { return nil }
+
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	gw := New(fakeAuth{good: "valid-token"}, log)
+	gw := New(fakeAuth{good: "valid-token"}, fakeCharacters{}, zone.NewManager(), log)
 	srv := httptest.NewServer(gw)
 	t.Cleanup(srv.Close)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
@@ -72,6 +85,24 @@ func TestHandshakeRejectsInvalidToken(t *testing.T) {
 	}
 }
 
+// readHandshake consomme les deux messages d'entrée en jeu (auth.ok puis
+// zone.snapshot) et retourne le snapshot décodé.
+func readHandshake(t *testing.T, ws *websocket.Conn) zone.SnapshotData {
+	t.Helper()
+	if env := readEnvelope(t, ws); env.Type != protocol.TypeAuthOK {
+		t.Fatalf("1er message: attendu %q, obtenu %q", protocol.TypeAuthOK, env.Type)
+	}
+	env := readEnvelope(t, ws)
+	if env.Type != protocol.TypeZoneSnapshot {
+		t.Fatalf("2e message: attendu %q, obtenu %q", protocol.TypeZoneSnapshot, env.Type)
+	}
+	var snap zone.SnapshotData
+	if err := env.DecodeData(&snap); err != nil {
+		t.Fatalf("décodage zone.snapshot: %v", err)
+	}
+	return snap
+}
+
 func TestHandshakeAcceptsValidTokenViaQuery(t *testing.T) {
 	_, wsURL := newTestServer(t)
 	ws, resp, err := websocket.DefaultDialer.Dial(wsURL+"?token=valid-token", nil)
@@ -109,6 +140,31 @@ func TestHandshakeAcceptsBearerHeader(t *testing.T) {
 	}
 }
 
+// TestZoneSnapshotOnEntry vérifie qu'après le handshake le joueur reçoit un
+// zone.snapshot le contenant lui-même (T3).
+func TestZoneSnapshotOnEntry(t *testing.T) {
+	_, wsURL := newTestServer(t)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL+"?token=valid-token", nil)
+	if err != nil {
+		t.Fatalf("connexion: %v", err)
+	}
+	defer ws.Close()
+
+	snap := readHandshake(t, ws)
+	if snap.ZoneID != 7 {
+		t.Fatalf("zone_id: attendu 7, obtenu %d", snap.ZoneID)
+	}
+	if snap.Self != "char-42" {
+		t.Fatalf("self: attendu char-42, obtenu %q", snap.Self)
+	}
+	if len(snap.Entities) != 1 || snap.Entities[0].CharacterID != "char-42" {
+		t.Fatalf("entities: attendu [char-42], obtenu %+v", snap.Entities)
+	}
+	if snap.Entities[0].Name != "Testeur" || snap.Entities[0].MaxHP != 100 {
+		t.Fatalf("état d'entité incorrect: %+v", snap.Entities[0])
+	}
+}
+
 func TestEcho(t *testing.T) {
 	_, wsURL := newTestServer(t)
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL+"?token=valid-token", nil)
@@ -116,7 +172,7 @@ func TestEcho(t *testing.T) {
 		t.Fatalf("connexion: %v", err)
 	}
 	defer ws.Close()
-	readEnvelope(t, ws) // consomme auth.ok
+	readHandshake(t, ws) // consomme auth.ok + zone.snapshot
 
 	// Un message quelconque doit revenir en écho, avec le même seq et la même data.
 	msg, _ := protocol.Encode("chat.say", 7, map[string]string{"body": "bonjour"})
@@ -146,7 +202,7 @@ func TestPingPong(t *testing.T) {
 		t.Fatalf("connexion: %v", err)
 	}
 	defer ws.Close()
-	readEnvelope(t, ws) // auth.ok
+	readHandshake(t, ws) // auth.ok + zone.snapshot
 
 	ping, _ := protocol.Encode(protocol.TypePing, 3, nil)
 	if err := ws.WriteMessage(websocket.TextMessage, ping); err != nil {
@@ -165,7 +221,7 @@ func TestInvalidMessageGetsError(t *testing.T) {
 		t.Fatalf("connexion: %v", err)
 	}
 	defer ws.Close()
-	readEnvelope(t, ws) // auth.ok
+	readHandshake(t, ws) // auth.ok + zone.snapshot
 
 	if err := ws.WriteMessage(websocket.TextMessage, []byte("pas du json")); err != nil {
 		t.Fatalf("écriture: %v", err)
