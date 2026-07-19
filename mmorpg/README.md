@@ -171,6 +171,39 @@ Astuce : ouvre la page dans **deux onglets** avec deux emails différents pour
 voir deux personnages se rejoindre dans la même zone. Le bouton « Ping » et le
 champ d'écho permettent aussi de tester le transport WebSocket (T2).
 
+### Tester sans navigateur (smoketest)
+
+Si le navigateur ne convient pas, une commande rejoue tout le parcours T0→T3 et
+affiche un rapport ✓/✗ étape par étape. Le serveur doit déjà tourner.
+
+```bash
+# Terminal 1 — le serveur (via docker compose, ou go run ./cmd/server)
+cd mmorpg && docker compose up --build
+
+# Terminal 2 — le test (depuis mmorpg/server)
+cd mmorpg/server
+go run ./cmd/smoketest                    # cible http://localhost:8080
+# ou, si le serveur écoute ailleurs :
+go run ./cmd/smoketest http://localhost:8080
+```
+
+Sortie attendue :
+
+```
+  ✓ Le serveur est prêt (GET /readyz)
+  ✓ Créer un compte (POST /auth/register)
+  ✓ Se connecter (POST /auth/login)
+  ✓ Vérifier la session (GET /auth/me)
+  ✓ Entrer en jeu en WebSocket + recevoir auth.ok et zone.snapshot
+  ✓ Ping applicatif → pong
+  ✓ Écho d'un message
+✅ Tout fonctionne : 7/7 étapes OK.
+```
+
+La première étape en échec indique où ça bloque : si même `/readyz` échoue, le
+serveur n'est pas démarré ou pas joignable (problème Docker / port), pas un
+problème applicatif.
+
 ### En local (serveur hors conteneur)
 
 Nécessite un PostgreSQL et un Redis joignables (via `docker compose up -d postgres redis`
