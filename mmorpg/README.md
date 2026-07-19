@@ -155,6 +155,22 @@ curl localhost:8080/readyz
 # {"status":"ok","checks":{"postgres":"ok","redis":"ok"}}
 ```
 
+### Essayer dans le navigateur (client de test)
+
+Une **page de test** est servie à la racine pour exercer le serveur à la main
+sans écrire de code — c'est un harnais de développement, pas le client de jeu
+final.
+
+1. `cd mmorpg && docker compose up --build`
+2. Ouvrir **http://localhost:8080** dans le navigateur.
+3. « Créer un compte » → « Se connecter » → « Entrer en jeu ».
+4. La page affiche le `zone.snapshot` reçu : la zone, ton personnage, et la
+   liste des entités présentes (avec une mini-carte).
+
+Astuce : ouvre la page dans **deux onglets** avec deux emails différents pour
+voir deux personnages se rejoindre dans la même zone. Le bouton « Ping » et le
+champ d'écho permettent aussi de tester le transport WebSocket (T2).
+
 ### En local (serveur hors conteneur)
 
 Nécessite un PostgreSQL et un Redis joignables (via `docker compose up -d postgres redis`
