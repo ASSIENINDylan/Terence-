@@ -42,9 +42,13 @@ type World interface {
 	Enter(char domain.Character, client zone.Client) zone.SnapshotData
 	Leave(char domain.Character)
 	Move(char domain.Character, in zone.Intent)
-	CombatAction(char domain.Character, action string)
+	CombatAction(char domain.Character, action, techID string)
 	Transition(char domain.Character, linkID int, client zone.Client) (domain.Character, zone.SnapshotData, error)
 	CurrentChar(char domain.Character) (domain.Character, bool)
+	SpendAttr(char domain.Character, attr string, perfect bool)
+	LearnTech(char domain.Character, id string)
+	BuyPotion(char domain.Character)
+	UsePotion(char domain.Character)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -130,9 +134,21 @@ type moveIntentPayload struct {
 	DY int `json:"dy"`
 }
 
-// combatActionPayload est la charge utile d'un message combat.action (T5).
+// combatActionPayload est la charge utile d'un message combat.action.
 type combatActionPayload struct {
-	Action string `json:"action"` // "attack" | "flee"
+	Action string `json:"action"`  // "attack" | "technique" | "flee"
+	TechID string `json:"tech_id"` // requis pour "technique"
+}
+
+// spendAttrPayload : dépense d'un point d'attribut à l'académie.
+type spendAttrPayload struct {
+	Attr    string `json:"attr"` // "str" | "def" | "agi"
+	Perfect bool   `json:"perfect"`
+}
+
+// learnTechPayload : apprentissage d'une technique au temple.
+type learnTechPayload struct {
+	TechID string `json:"tech_id"`
 }
 
 // transitionPayload est la charge utile d'un message zone.transition.

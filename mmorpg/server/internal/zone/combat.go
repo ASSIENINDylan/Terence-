@@ -5,6 +5,7 @@ import (
 
 	"github.com/assienindylan/terence-/mmorpg/server/internal/domain"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/protocol"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/rules"
 )
 
 // combat est un affrontement 1v1 au tour par tour entre deux membres présents
@@ -27,15 +28,15 @@ func (c *combat) other(id string) string {
 
 // Combatant décrit un participant au début d'un combat.
 type Combatant struct {
-	CharacterID string `json:"character_id"`
-	Name        string `json:"name"`
-	FactionID   int    `json:"faction_id"`
-	Level       int    `json:"level"`
-	HP          int    `json:"hp"`
-	MaxHP       int    `json:"max_hp"`
-	Str         int    `json:"str"`
-	Def         int    `json:"def"`
-	Agi         int    `json:"agi"`
+	CharacterID string  `json:"character_id"`
+	Name        string  `json:"name"`
+	FactionID   int     `json:"faction_id"`
+	Level       int     `json:"level"`
+	HP          int     `json:"hp"`
+	MaxHP       int     `json:"max_hp"`
+	Str         float64 `json:"str"`
+	Def         float64 `json:"def"`
+	Agi         float64 `json:"agi"`
 }
 
 func combatantOf(c domain.Character) Combatant {
@@ -53,16 +54,18 @@ type CombatStartData struct {
 	TurnMs    int         `json:"turn_ms"` // délai avant attaque automatique
 }
 
-// CombatEventData : résultat d'une action (attaque ou tentative de fuite).
+// CombatEventData : résultat d'une action (attaque, technique ou fuite).
 type CombatEventData struct {
-	CombatID string `json:"combat_id"`
-	Actor    string `json:"actor"`
-	Action   string `json:"action"` // "attack" | "flee"
-	Target   string `json:"target,omitempty"`
-	Damage   int    `json:"damage,omitempty"`
-	TargetHP int    `json:"target_hp,omitempty"`
-	Fled     bool   `json:"fled,omitempty"`
-	Turn     string `json:"turn,omitempty"` // à qui de jouer ensuite ("" si terminé)
+	CombatID    string `json:"combat_id"`
+	Actor       string `json:"actor"`
+	Action      string `json:"action"` // "attack" | "technique" | "flee"
+	Tech        string `json:"tech,omitempty"`
+	Target      string `json:"target,omitempty"`
+	Damage      int    `json:"damage,omitempty"`
+	TargetHP    int    `json:"target_hp,omitempty"`
+	ActorEnergy int    `json:"actor_energy,omitempty"`
+	Fled        bool   `json:"fled,omitempty"`
+	Turn        string `json:"turn,omitempty"` // à qui de jouer ensuite ("" si terminé)
 }
 
 // RespawnInfo décrit la réapparition d'un personnage mort (au village).
@@ -146,13 +149,14 @@ func (z *Zone) resolveTimedOutTurns() {
 	}
 	for _, c := range expired {
 		if _, ok := z.combats[c.id]; ok {
-			z.resolveAction(c, c.turn, "attack") // le joueur passif attaque par défaut
+			z.resolveAction(c, c.turn, "attack", "") // attaque par défaut
 		}
 	}
 }
 
 // resolveAction applique l'action du joueur actif et fait avancer le combat.
-func (z *Zone) resolveAction(c *combat, actorID, action string) {
+// action ∈ {"attack", "technique", "flee"} ; techID est requis pour "technique".
+func (z *Zone) resolveAction(c *combat, actorID, action, techID string) {
 	actor := z.members[actorID]
 	opp := z.members[c.other(actorID)]
 	if actor == nil || opp == nil {
@@ -161,14 +165,13 @@ func (z *Zone) resolveAction(c *combat, actorID, action string) {
 	}
 
 	if action == "flee" {
-		if z.fleeSucceeds(actor.char, opp.char) {
+		if z.rng.Float64() < rules.FleeChance(actor.char, opp.char) {
 			z.sendBoth(c, protocol.TypeCombatEvent, CombatEventData{
 				CombatID: c.id, Actor: actorID, Action: "flee", Fled: true,
 			})
 			z.endCombat(c, "", "", "flee", nil)
 			return
 		}
-		// Échec : le tour passe à l'adversaire.
 		c.turn = opp.char.ID
 		c.deadline = z.tick + z.turnTimeoutTicks
 		z.sendBoth(c, protocol.TypeCombatEvent, CombatEventData{
@@ -177,26 +180,58 @@ func (z *Zone) resolveAction(c *combat, actorID, action string) {
 		return
 	}
 
-	// Attaque.
-	dmg := damage(actor.char, opp.char)
-	opp.char.HP -= dmg
-	if opp.char.HP < 0 {
-		opp.char.HP = 0
+	ev := CombatEventData{CombatID: c.id, Actor: actorID, Target: opp.char.ID}
+
+	if action == "technique" {
+		t, ok := rules.FindTech(actor.char.Element, techID)
+		if !ok || !actor.char.KnowsTech(techID) || actor.char.Energy < t.Cost {
+			// Action invalide : on renvoie une erreur et on ne consomme pas le tour.
+			actor.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
+				Code: "invalid_technique", Message: "technique indisponible ou énergie insuffisante",
+			})
+			return
+		}
+		actor.char.Energy -= t.Cost
+		dmg := rules.TechDamage(actor.char, t, opp.char)
+		opp.char.HP = maxi(0, opp.char.HP-dmg)
+		ev.Action = "technique"
+		ev.Tech = t.Name
+		ev.Damage = dmg
+		ev.ActorEnergy = actor.char.Energy
+		z.sendCharUpdate(actor)
+	} else { // attaque normale
+		dmg := rules.Damage(actor.char, opp.char)
+		opp.char.HP = maxi(0, opp.char.HP-dmg)
+		ev.Action = "attack"
+		ev.Damage = dmg
 	}
-	ev := CombatEventData{
-		CombatID: c.id, Actor: actorID, Action: "attack",
-		Target: opp.char.ID, Damage: dmg, TargetHP: opp.char.HP,
-	}
+	ev.TargetHP = opp.char.HP
 
 	if opp.char.HP == 0 { // mort
 		z.sendBoth(c, protocol.TypeCombatEvent, ev)
 		z.handleDeath(c, actorID, opp.char.ID)
 		return
 	}
+	// Tour suivant : l'adversaire regagne de l'énergie.
 	c.turn = opp.char.ID
 	c.deadline = z.tick + z.turnTimeoutTicks
+	opp.char.Energy = mini(opp.char.MaxEnergy, opp.char.Energy+rules.EnergyRegenPerTurn)
+	z.sendCharUpdate(opp)
 	ev.Turn = c.turn
 	z.sendBoth(c, protocol.TypeCombatEvent, ev)
+}
+
+func maxi(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+func mini(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // handleDeath applique la pénalité d'XP selon le palier de la zone, récompense
@@ -214,8 +249,18 @@ func (z *Zone) handleDeath(c *combat, winnerID, loserID string) {
 		}
 	}
 	if winner != nil {
-		winGain = combatXPReward
-		winner.char.XP += winGain // persisté à la déconnexion/transition (T8)
+		winGain = rules.KillXPReward
+		winner.char.Gold += rules.KillGoldReward
+		rules.ApplyXP(&winner.char, winGain) // montée de niveau (points d'attribut/technique)
+		// Série de kills sans quitter la zone → point parfait (orange/red).
+		if thr := rules.PerfectKillThreshold(z.meta.Tier); thr > 0 {
+			winner.streak++
+			if winner.streak >= thr {
+				winner.streak = 0
+				winner.char.PerfectPoints++
+			}
+		}
+		z.sendCharUpdate(winner)
 	}
 
 	homeZone := z.meta.ID // repli défensif si le village est inconnu
@@ -296,29 +341,6 @@ func (z *Zone) sendBoth(c *combat, msgType string, data any) {
 }
 
 // ── Règles de combat ────────────────────────────────────────────────────────
-
-// damage : dégâts d'une attaque, gouvernés par la force de l'attaquant et la
-// défense de la cible. Au moins 1 pour qu'un combat se termine toujours.
-func damage(atk, def domain.Character) int {
-	d := atk.Str*3 - def.Def
-	if d < 1 {
-		d = 1
-	}
-	return d
-}
-
-// fleeSucceeds : la fuite réussit avec une probabilité gouvernée par l'agilité
-// relative des deux personnages.
-func (z *Zone) fleeSucceeds(fleer, opp domain.Character) bool {
-	chance := 0.35 + 0.02*float64(fleer.Agi-opp.Agi)
-	if chance < 0.1 {
-		chance = 0.1
-	}
-	if chance > 0.85 {
-		chance = 0.85
-	}
-	return z.rng.Float64() < chance
-}
 
 // initiative : qui joue en premier — le plus agile, à égalité le plus petit id
 // (déterministe).

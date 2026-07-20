@@ -37,6 +37,14 @@ const (
 	TypeCombatEvent = "combat.event"
 	// TypeCombatEnd : fin du combat (mort et réapparition, ou fuite).
 	TypeCombatEnd = "combat.end"
+	// TypeCharUpdate : état complet du personnage (fiche) après tout changement
+	// (niveau, stats, or, énergie, points, techniques).
+	TypeCharUpdate = "char.update"
+	// Services du village (client→serveur) : académie, temple, boutique.
+	TypeSpendAttr = "char.spend_attr" // {attr:"str|def|agi", perfect:bool}
+	TypeLearnTech = "char.learn_tech" // {tech_id}
+	TypeBuyPotion = "char.buy_potion"
+	TypeUsePotion = "char.use_potion"
 	// TypeEcho est renvoyé par le serveur en écho d'un message reçu (T2).
 	TypeEcho = "echo"
 	// TypeError signale une erreur applicative sur la connexion.

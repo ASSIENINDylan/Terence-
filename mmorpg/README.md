@@ -267,6 +267,49 @@ renvoie au village.
 > Portée : les mobs PvE et le gain d'XP hors combat viendront plus tard ; l'XP se
 > gagne pour l'instant en remportant un combat.
 
+## Progression, académie & techniques (serveur)
+
+Portage sur le serveur du système de progression (auparavant seulement dans la
+maquette). Toutes les valeurs chiffrées sont regroupées dans `internal/rules`
+(fonctions pures, testées) pour un ré-équilibrage facile.
+
+- **Statistiques flottantes** : attaque/défense/agilité en `double precision`
+  (l'académie fait varier de 0,5).
+- **Formules** :
+  - dégâts = `0,5·att + 0,3·déf + 0,2·agi` − `0,6 ×` réduction adverse ;
+  - réduction = `0,5·déf + 0,3·agi + 0,2·att` ; fuite = `0,5·agi + 0,3·att + 0,2·déf`.
+- **Montée de niveau** (lente) : XP requise = `50 × niveau`. Chaque niveau donne
+  un **point d'attribut** ; un **point de technique** tous les 5 niveaux ; les PV
+  max augmentent.
+- **Académie** (village) : point normal sur la spécialité = **+2, −0,5 aux
+  autres** ; sur un autre attribut = **+1** sans malus. Point **parfait** (séries
+  de 10 kills en orange / 5 en rouge sans quitter la zone) = **+2** spé / **+1,5**
+  autre, sans malus.
+- **Temple** (village) : chaque village a ses **techniques** ; on les apprend
+  avec un point de technique. Elles **coûtent de l'énergie**, sont plus fortes
+  qu'une attaque normale, et leurs dégâts sont **dominés par l'affinité du
+  village mais pas seulement** (les deux autres attributs comptent aussi).
+- **Or & boutique** (village) : les kills rapportent de l'or ; potions de soin à
+  l'achat, utilisables au combat.
+- **Énergie** : restaurée au village, regagnée à chaque tour de combat.
+- **Messages** : `char.update` (fiche complète à chaque changement),
+  `char.spend_attr`, `char.learn_tech`, `char.buy_potion`, `char.use_potion`,
+  et `combat.action` avec `tech_id` pour lancer une technique.
+
+> Confirmation de portail : côté serveur, une transition est **toujours
+> explicite** (le client envoie `zone.transition` ; le serveur ne traverse jamais
+> automatiquement) — la fenêtre de confirmation est donc une décision du client
+> (implémentée dans la maquette).
+
+> Restent à porter : les **mobs PvE** (entités serveur + IA de combat) — un
+> système à part, prévu ensuite. L'XP/l'or se gagnent pour l'instant en PvP.
+
+**Validé de bout en bout** (PostgreSQL 16 + Redis 7) : fiche `char.update` à
+l'entrée (stats, énergie, catalogue de techniques) ; académie (att 15→17, déf/agi
+−0,5) ; temple (apprentissage de `feu1`) ; technique en combat (**17 dégâts** vs
+6 pour une attaque normale, énergie 50→35). `go test -race` vert (dont le package
+`rules`).
+
 ## Démarrage rapide
 
 ### Avec docker compose (recommandé)

@@ -137,7 +137,27 @@ func (s *session) handle(env protocol.Envelope) {
 			})
 			return
 		}
-		s.gw.world.CombatAction(s.getChar(), ca.Action)
+		s.gw.world.CombatAction(s.getChar(), ca.Action, ca.TechID)
+
+	case protocol.TypeSpendAttr:
+		var p spendAttrPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.SpendAttr(s.getChar(), p.Attr, p.Perfect)
+
+	case protocol.TypeLearnTech:
+		var p learnTechPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.LearnTech(s.getChar(), p.TechID)
+
+	case protocol.TypeBuyPotion:
+		s.gw.world.BuyPotion(s.getChar())
+
+	case protocol.TypeUsePotion:
+		s.gw.world.UsePotion(s.getChar())
 
 	case protocol.TypeZoneTransition:
 		var t transitionPayload

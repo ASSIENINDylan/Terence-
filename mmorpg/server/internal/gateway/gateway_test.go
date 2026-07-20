@@ -88,22 +88,25 @@ func TestHandshakeRejectsInvalidToken(t *testing.T) {
 	}
 }
 
-// readHandshake consomme les deux messages d'entrée en jeu (auth.ok puis
-// zone.snapshot) et retourne le snapshot décodé.
+// readHandshake consomme les messages d'entrée en jeu (auth.ok, char.update…)
+// jusqu'au zone.snapshot, qu'il retourne décodé.
 func readHandshake(t *testing.T, ws *websocket.Conn) zone.SnapshotData {
 	t.Helper()
 	if env := readEnvelope(t, ws); env.Type != protocol.TypeAuthOK {
 		t.Fatalf("1er message: attendu %q, obtenu %q", protocol.TypeAuthOK, env.Type)
 	}
-	env := readEnvelope(t, ws)
-	if env.Type != protocol.TypeZoneSnapshot {
-		t.Fatalf("2e message: attendu %q, obtenu %q", protocol.TypeZoneSnapshot, env.Type)
+	for i := 0; i < 5; i++ {
+		env := readEnvelope(t, ws)
+		if env.Type == protocol.TypeZoneSnapshot {
+			var snap zone.SnapshotData
+			if err := env.DecodeData(&snap); err != nil {
+				t.Fatalf("décodage zone.snapshot: %v", err)
+			}
+			return snap
+		}
 	}
-	var snap zone.SnapshotData
-	if err := env.DecodeData(&snap); err != nil {
-		t.Fatalf("décodage zone.snapshot: %v", err)
-	}
-	return snap
+	t.Fatal("zone.snapshot non reçu après le handshake")
+	return zone.SnapshotData{}
 }
 
 func TestHandshakeAcceptsValidTokenViaQuery(t *testing.T) {

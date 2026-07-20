@@ -357,7 +357,7 @@ func driveToEnd(t *testing.T, m *Manager, s *capSender) CombatEndData {
 			return end
 		}
 		if turn := s.currentTurn(); turn != "" {
-			m.CombatAction(char(turn, 1), "attack")
+			m.CombatAction(char(turn, 1), "attack", "")
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
@@ -425,7 +425,7 @@ func TestFleeIsProcessed(t *testing.T) {
 		t.Fatal("combat non engagé")
 	}
 	turn := sa.currentTurn()
-	m.CombatAction(char(turn, 1), "flee")
+	m.CombatAction(char(turn, 1), "flee", "")
 	ok := waitFor(time.Second, func() bool {
 		if end, ended := sa.combatEnd(); ended && end.Reason == "flee" {
 			return true

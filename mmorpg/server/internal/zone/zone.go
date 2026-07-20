@@ -17,6 +17,7 @@ import (
 
 	"github.com/assienindylan/terence-/mmorpg/server/internal/domain"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/protocol"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/rules"
 )
 
 const (
@@ -28,7 +29,6 @@ const (
 	turnTimeoutSec   = 15
 	engageCooldown   = 3
 	transitionRadius = 45 // distance max d'un portail pour l'emprunter
-	combatXPReward   = 50 // XP gagnée en remportant un combat PvP
 )
 
 // Sender pousse un message à un joueur.
@@ -140,6 +140,7 @@ type member struct {
 
 	combatID      string
 	cooldownUntil uint64
+	streak        int // kills consécutifs dans cette zone (points parfaits)
 }
 
 func (m *member) inCombat() bool { return m.combatID != "" }
@@ -264,8 +265,15 @@ func (z *Zone) snapshotFor(charID string) SnapshotData {
 func (z *Zone) enter(char domain.Character, client Client) SnapshotData {
 	reply := make(chan SnapshotData, 1)
 	z.cmds <- func() {
-		z.members[char.ID] = &member{char: char, client: client}
+		m := &member{char: char, client: client}
+		// Repos au village : PV et énergie restaurés au maximum.
+		if z.meta.Tier == "village" {
+			m.char.HP = m.char.MaxHP
+			m.char.Energy = m.char.MaxEnergy
+		}
+		z.members[char.ID] = m
 		z.joined = append(z.joined, char.ID)
+		z.sendCharUpdate(m)
 		reply <- z.snapshotFor(char.ID)
 	}
 	return <-reply
@@ -296,7 +304,7 @@ func (z *Zone) move(charID string, in Intent) {
 	}
 }
 
-func (z *Zone) combatAction(charID, action string) {
+func (z *Zone) combatAction(charID, action, techID string) {
 	z.cmds <- func() {
 		m := z.members[charID]
 		if m == nil || !m.inCombat() {
@@ -312,10 +320,28 @@ func (z *Zone) combatAction(charID, action string) {
 			})
 			return
 		}
-		if action != "attack" && action != "flee" {
+		if action != "attack" && action != "flee" && action != "technique" {
 			action = "attack"
 		}
-		z.resolveAction(c, charID, action)
+		z.resolveAction(c, charID, action, techID)
+	}
+}
+
+// villageAction exécute fn (académie/temple/boutique) sur le personnage, mais
+// seulement dans un village, puis renvoie l'état mis à jour au client.
+func (z *Zone) villageAction(charID string, fn func(*member)) {
+	z.cmds <- func() {
+		m := z.members[charID]
+		if m == nil {
+			return
+		}
+		if z.meta.Tier != "village" {
+			m.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{
+				Code: "not_in_village", Message: "ce service n'est disponible qu'au village",
+			})
+			return
+		}
+		fn(m)
 	}
 }
 
@@ -412,9 +438,65 @@ func (m *Manager) Move(char domain.Character, in Intent) {
 }
 
 // CombatAction transmet l'action de combat d'un personnage à sa zone.
-func (m *Manager) CombatAction(char domain.Character, action string) {
+func (m *Manager) CombatAction(char domain.Character, action, techID string) {
 	if z := m.lookup(char.ZoneID); z != nil {
-		z.combatAction(char.ID, action)
+		z.combatAction(char.ID, action, techID)
+	}
+}
+
+// SpendAttr dépense un point d'attribut à l'académie du village.
+func (m *Manager) SpendAttr(char domain.Character, attr string, perfect bool) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		z.villageAction(char.ID, func(mem *member) {
+			if err := rules.SpendAttr(&mem.char, attr, perfect); err != nil {
+				mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "spend_failed", Message: err.Error()})
+				return
+			}
+			z.sendCharUpdate(mem)
+		})
+	}
+}
+
+// LearnTech apprend une technique au temple du village.
+func (m *Manager) LearnTech(char domain.Character, id string) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		z.villageAction(char.ID, func(mem *member) {
+			if _, err := rules.LearnTech(&mem.char, id); err != nil {
+				mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "learn_failed", Message: err.Error()})
+				return
+			}
+			z.sendCharUpdate(mem)
+		})
+	}
+}
+
+// BuyPotion achète une potion à la boutique du village.
+func (m *Manager) BuyPotion(char domain.Character) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		z.villageAction(char.ID, func(mem *member) {
+			if err := rules.BuyPotion(&mem.char); err != nil {
+				mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "buy_failed", Message: err.Error()})
+				return
+			}
+			z.sendCharUpdate(mem)
+		})
+	}
+}
+
+// UsePotion consomme une potion (utilisable partout, y compris hors village).
+func (m *Manager) UsePotion(char domain.Character) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		z.cmds <- func() {
+			mem := z.members[char.ID]
+			if mem == nil {
+				return
+			}
+			if _, err := rules.UsePotion(&mem.char); err != nil {
+				mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "potion_failed", Message: err.Error()})
+				return
+			}
+			z.sendCharUpdate(mem)
+		}
 	}
 }
 

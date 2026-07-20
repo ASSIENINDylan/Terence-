@@ -43,14 +43,20 @@ func (s *Store) GetOrCreateForAccount(ctx context.Context, accountID int64, elem
 	return s.createCharacter(ctx, accountID, element)
 }
 
-const characterCols = `c.id, c.account_id, c.name, c.faction_id, c.level, c.xp,
+const characterCols = `c.id, c.account_id, c.name, c.faction_id,
+	f.element, f.bonus_stat, c.level, c.xp,
 	c.hp, c.max_hp, c.str, c.def, c.agi,
+	c.energy, c.max_energy, c.gold, c.potions,
+	c.attr_points, c.perfect_points, c.tech_points, c.learned_techs,
 	COALESCE(c.pos_zone_id, 0), c.pos_x, c.pos_y, COALESCE(v.spawn_zone_id, 0)`
 
 func scanCharacter(row pgx.Row) (domain.Character, error) {
 	var c domain.Character
-	err := row.Scan(&c.ID, &c.AccountID, &c.Name, &c.FactionID, &c.Level, &c.XP,
+	err := row.Scan(&c.ID, &c.AccountID, &c.Name, &c.FactionID,
+		&c.Element, &c.SpecStat, &c.Level, &c.XP,
 		&c.HP, &c.MaxHP, &c.Str, &c.Def, &c.Agi,
+		&c.Energy, &c.MaxEnergy, &c.Gold, &c.Potions,
+		&c.AttrPoints, &c.PerfectPoints, &c.TechPoints, &c.LearnedTechs,
 		&c.ZoneID, &c.X, &c.Y, &c.HomeZoneID)
 	return c, err
 }
@@ -59,6 +65,7 @@ func (s *Store) firstCharacter(ctx context.Context, accountID int64) (domain.Cha
 	c, err := scanCharacter(s.pool.QueryRow(ctx, `
 		SELECT `+characterCols+`
 		FROM characters c
+		JOIN factions f ON f.id = c.faction_id
 		LEFT JOIN villages v ON v.id = c.home_village_id
 		WHERE c.account_id = $1 AND c.deleted_at IS NULL
 		ORDER BY c.created_at
@@ -115,9 +122,15 @@ func elementTitle(e string) string {
 func (s *Store) SaveState(ctx context.Context, c domain.Character) error {
 	if _, err := s.pool.Exec(ctx, `
 		UPDATE characters
-		SET pos_zone_id = $2, pos_x = $3, pos_y = $4, hp = $5, xp = $6, last_played_at = now()
+		SET pos_zone_id = $2, pos_x = $3, pos_y = $4, hp = $5, xp = $6, level = $7,
+		    str = $8, def = $9, agi = $10, energy = $11, max_energy = $12, max_hp = $13,
+		    gold = $14, potions = $15, attr_points = $16, perfect_points = $17,
+		    tech_points = $18, learned_techs = $19, last_played_at = now()
 		WHERE id = $1`,
-		c.ID, c.ZoneID, c.X, c.Y, c.HP, c.XP,
+		c.ID, c.ZoneID, c.X, c.Y, c.HP, c.XP, c.Level,
+		c.Str, c.Def, c.Agi, c.Energy, c.MaxEnergy, c.MaxHP,
+		c.Gold, c.Potions, c.AttrPoints, c.PerfectPoints,
+		c.TechPoints, c.LearnedTechs,
 	); err != nil {
 		return fmt.Errorf("store: sauvegarde de l'état du personnage: %w", err)
 	}
