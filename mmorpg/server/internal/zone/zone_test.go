@@ -436,3 +436,90 @@ func TestFleeIsProcessed(t *testing.T) {
 		t.Fatal("la tentative de fuite aurait dû être traitée")
 	}
 }
+
+// ── Mobs PvE ────────────────────────────────────────────────────────────────
+
+func mobMetas(tier string, xpLoss float64) map[int]ZoneMeta {
+	return map[int]ZoneMeta{1: {ID: 1, Name: "Zone", Tier: tier, PvP: tier == "orange" || tier == "red", MobTier: tier, DeathXPLoss: xpLoss}}
+}
+
+// forcePlayerOntoMob téléporte un joueur sur un mob pour déclencher la rencontre
+// (exécuté dans la goroutine de la zone : sûr).
+func (m *Manager) forcePlayerOntoMob(playerID string, zoneID int) {
+	z := m.lookup(zoneID)
+	if z == nil {
+		return
+	}
+	done := make(chan struct{})
+	z.cmds <- func() {
+		p := z.members[playerID]
+		for _, mob := range z.members {
+			if mob.isMob {
+				p.char.X, p.char.Y = mob.char.X, mob.char.Y
+				break
+			}
+		}
+		close(done)
+	}
+	<-done
+}
+
+func (c *capSender) lastCharState() (CharState, bool) {
+	var cs CharState
+	ok := false
+	c.each(func(e capEntry) {
+		if d, is := e.data.(CharState); is {
+			cs, ok = d, true
+		}
+	})
+	return cs, ok
+}
+
+func hero(id string) domain.Character {
+	return domain.Character{ID: id, Name: id, Level: 1, HP: 100, MaxHP: 100,
+		Str: 30, Def: 20, Agi: 20, ZoneID: 1, HomeZoneID: 9, Element: "feu", SpecStat: "str", MaxEnergy: 50, Energy: 50}
+}
+
+func TestMobsSpawnInMobZone(t *testing.T) {
+	m := NewManager(50, mobMetas("green", 0), nil)
+	defer m.Close()
+	// Les zones sont créées à la demande : l'entrée du joueur instancie la zone
+	// verte, qui fait apparaître ses 3 mobs. On compte donc 3 mobs + 1 joueur.
+	m.Enter(hero("p"), newCapSender())
+	if got := m.Count(1); got != 4 {
+		t.Fatalf("la zone verte devrait contenir 3 mobs + le joueur, obtenu %d", got)
+	}
+}
+
+func TestPlayerKillsMobAndIsRewarded(t *testing.T) {
+	m := NewManager(50, mobMetas("green", 0), nil)
+	defer m.Close()
+	s := newCapSender()
+	m.Enter(hero("p"), s)
+	m.forcePlayerOntoMob("p", 1)
+
+	if !waitFor(2*time.Second, func() bool { return s.has(protocol.TypeCombatStart) }) {
+		t.Fatal("un combat PvE aurait dû s'engager avec un mob")
+	}
+	// Le joueur attaque à son tour ; le mob agit via l'IA automatiquement.
+	var end CombatEndData
+	ok := false
+	for i := 0; i < 300 && !ok; i++ {
+		if e, has := s.combatEnd(); has {
+			end, ok = e, true
+			break
+		}
+		if s.currentTurn() == "p" {
+			m.CombatAction(char("p", 1), "attack", "")
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if !ok || end.Winner != "p" {
+		t.Fatalf("le héros aurait dû vaincre le mob : %+v (ok=%v)", end, ok)
+	}
+	// Récompense : de l'or (moins qu'un joueur) via char.update.
+	cs, has := s.lastCharState()
+	if !has || cs.Gold <= 0 {
+		t.Fatalf("le joueur aurait dû gagner de l'or en tuant le mob : %+v", cs)
+	}
+}

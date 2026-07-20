@@ -11,10 +11,11 @@ import (
 // combat est un affrontement 1v1 au tour par tour entre deux membres présents
 // dans la zone. L'état est possédé par la goroutine de la zone (pas de verrou).
 type combat struct {
-	id       string
-	a, b     string // identifiants des personnages
-	turn     string // à qui de jouer
-	deadline uint64 // tick au-delà duquel le tour expire (attaque automatique)
+	id         string
+	a, b       string // identifiants des personnages
+	turn       string // à qui de jouer
+	deadline   uint64 // joueur : tick au-delà duquel le tour expire (attaque auto)
+	mobActTick uint64 // mob : tick auquel il agit (0 si ce n'est pas le tour d'un mob)
 }
 
 func (c *combat) other(id string) string {
@@ -37,12 +38,14 @@ type Combatant struct {
 	Str         float64 `json:"str"`
 	Def         float64 `json:"def"`
 	Agi         float64 `json:"agi"`
+	Mob         bool    `json:"mob,omitempty"`
 }
 
-func combatantOf(c domain.Character) Combatant {
+func combatantOf(m *member) Combatant {
+	c := m.char
 	return Combatant{
 		CharacterID: c.ID, Name: c.Name, FactionID: c.FactionID, Level: c.Level,
-		HP: c.HP, MaxHP: c.MaxHP, Str: c.Str, Def: c.Def, Agi: c.Agi,
+		HP: c.HP, MaxHP: c.MaxHP, Str: c.Str, Def: c.Def, Agi: c.Agi, Mob: m.isMob,
 	}
 }
 
@@ -91,32 +94,84 @@ type CombatEndData struct {
 
 // ── Détection des rencontres ────────────────────────────────────────────────
 
-// detectEncounters engage un combat entre deux membres libres de factions
-// opposées suffisamment proches, dans une zone où le PvP est autorisé.
+// detectEncounters engage les combats : PvE (joueur ↔ mob, dans toute zone
+// peuplée de mobs) et PvP (joueurs de factions opposées, zones PvP seulement).
 func (z *Zone) detectEncounters() {
-	if !z.meta.PvP {
-		return
-	}
-	var free []*member
+	var players, mobs []*member
 	for _, m := range z.members {
-		if !m.inCombat() && z.tick >= m.cooldownUntil {
-			free = append(free, m)
+		if m.inCombat() || z.tick < m.cooldownUntil {
+			continue
+		}
+		if m.isMob {
+			mobs = append(mobs, m)
+		} else {
+			players = append(players, m)
 		}
 	}
-	for i := 0; i < len(free); i++ {
-		for j := i + 1; j < len(free); j++ {
-			a, b := free[i], free[j]
-			if a.inCombat() || b.inCombat() { // engagé dans ce même passage
+
+	// PvE : un mob est hostile à tout joueur.
+	for _, p := range players {
+		if p.inCombat() {
+			continue
+		}
+		for _, mob := range mobs {
+			if mob.inCombat() {
 				continue
 			}
-			if a.char.FactionID == b.char.FactionID {
-				continue // alliés
-			}
-			if dist2(a.char, b.char) <= encounterRadius*encounterRadius {
-				z.startCombat(a, b)
+			if dist2(p.char, mob.char) <= encounterRadius*encounterRadius {
+				z.startCombat(p, mob)
+				break
 			}
 		}
 	}
+
+	// PvP : factions opposées, uniquement en zone PvP.
+	if z.meta.PvP {
+		for i := 0; i < len(players); i++ {
+			for j := i + 1; j < len(players); j++ {
+				a, b := players[i], players[j]
+				if a.inCombat() || b.inCombat() || a.char.FactionID == b.char.FactionID {
+					continue
+				}
+				if dist2(a.char, b.char) <= encounterRadius*encounterRadius {
+					z.startCombat(a, b)
+				}
+			}
+		}
+	}
+}
+
+// resolveMobTurns fait agir les mobs dont le délai de réflexion est écoulé.
+func (z *Zone) resolveMobTurns() {
+	var due []*combat
+	for _, c := range z.combats {
+		if c.mobActTick > 0 && z.tick >= c.mobActTick && z.isMob(c.turn) {
+			due = append(due, c)
+		}
+	}
+	for _, c := range due {
+		if _, ok := z.combats[c.id]; ok {
+			z.mobAI(c, c.turn)
+		}
+	}
+}
+
+// mobAI décide l'action d'un mob : fuir s'il est bas en PV et que l'adversaire
+// est encore vaillant, sinon frapper.
+func (z *Zone) mobAI(c *combat, mobID string) {
+	mob := z.members[mobID]
+	opp := z.members[c.other(mobID)]
+	if mob == nil || opp == nil {
+		z.clearCombat(c)
+		return
+	}
+	lowHP := mob.char.HP*100 < mob.char.MaxHP*rules.MobFleeHPPct
+	oppHealthy := opp.char.HP*100 > opp.char.MaxHP*rules.MobOppHPPct
+	if lowHP && oppHealthy {
+		z.resolveAction(c, mobID, "flee", "")
+		return
+	}
+	z.resolveAction(c, mobID, "attack", "")
 }
 
 func (z *Zone) startCombat(a, b *member) {
@@ -125,17 +180,35 @@ func (z *Zone) startCombat(a, b *member) {
 	a.combatID, b.combatID = id, id
 	a.intent, b.intent = Intent{}, Intent{} // le mouvement s'arrête
 
-	first := initiative(a.char, b.char)
-	c := &combat{id: id, a: a.char.ID, b: b.char.ID, turn: first, deadline: z.tick + z.turnTimeoutTicks}
+	c := &combat{id: id, a: a.char.ID, b: b.char.ID}
 	z.combats[id] = c
+	z.setTurn(c, initiative(a.char, b.char))
 
 	start := CombatStartData{
 		CombatID:  id,
-		Opponents: []Combatant{combatantOf(a.char), combatantOf(b.char)},
-		Turn:      first,
+		Opponents: []Combatant{combatantOf(a), combatantOf(b)},
+		Turn:      c.turn,
 		TurnMs:    turnTimeoutSec * 1000,
 	}
 	z.sendBoth(c, protocol.TypeCombatStart, start)
+}
+
+// setTurn fixe le prochain joueur actif et arme le bon minuteur : délai
+// d'inactivité pour un joueur, délai de « réflexion » pour un mob.
+func (z *Zone) setTurn(c *combat, id string) {
+	c.turn = id
+	if z.isMob(id) {
+		c.mobActTick = z.tick + z.mobThinkTicks
+		c.deadline = ^uint64(0) // pas de timeout d'inactivité pour un mob
+	} else {
+		c.deadline = z.tick + z.turnTimeoutTicks
+		c.mobActTick = 0
+	}
+}
+
+func (z *Zone) isMob(id string) bool {
+	m := z.members[id]
+	return m != nil && m.isMob
 }
 
 // ── Résolution des tours ────────────────────────────────────────────────────
@@ -172,8 +245,7 @@ func (z *Zone) resolveAction(c *combat, actorID, action, techID string) {
 			z.endCombat(c, "", "", "flee", nil)
 			return
 		}
-		c.turn = opp.char.ID
-		c.deadline = z.tick + z.turnTimeoutTicks
+		z.setTurn(c, opp.char.ID)
 		z.sendBoth(c, protocol.TypeCombatEvent, CombatEventData{
 			CombatID: c.id, Actor: actorID, Action: "flee", Fled: false, Turn: c.turn,
 		})
@@ -212,11 +284,8 @@ func (z *Zone) resolveAction(c *combat, actorID, action, techID string) {
 		z.handleDeath(c, actorID, opp.char.ID)
 		return
 	}
-	// Tour suivant : l'adversaire regagne de l'énergie.
-	c.turn = opp.char.ID
-	c.deadline = z.tick + z.turnTimeoutTicks
-	opp.char.Energy = mini(opp.char.MaxEnergy, opp.char.Energy+rules.EnergyRegenPerTurn)
-	z.sendCharUpdate(opp)
+	// Tour suivant. L'énergie ne se régénère PAS en combat (uniquement au village).
+	z.setTurn(c, opp.char.ID)
 	ev.Turn = c.turn
 	z.sendBoth(c, protocol.TypeCombatEvent, ev)
 }
@@ -227,32 +296,24 @@ func maxi(a, b int) int {
 	}
 	return b
 }
-func mini(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
-// handleDeath applique la pénalité d'XP selon le palier de la zone, récompense
-// le vainqueur, clôt le combat et relocalise le perdant vers son village.
+// handleDeath récompense le vainqueur (s'il est joueur), clôt le combat, puis
+// selon le perdant : réapparition du mob, ou pénalité d'XP + relocalisation du
+// joueur vers son village.
 func (z *Zone) handleDeath(c *combat, winnerID, loserID string) {
-	loser := z.members[loserID]
 	winner := z.members[winnerID]
+	loser := z.members[loserID]
 
-	var xpLost, newXP, winGain int64
-	if loser != nil {
-		xpLost = int64(float64(loser.char.XP) * z.meta.DeathXPLoss)
-		newXP = loser.char.XP - xpLost
-		if newXP < 0 {
-			newXP = 0
+	// Récompense le vainqueur joueur. Un mob rapporte moins qu'un joueur.
+	var winGain int64
+	if winner != nil && !winner.isMob {
+		xpGain, goldGain := int64(rules.KillXPReward), int64(rules.KillGoldReward)
+		if loser != nil && loser.isMob {
+			xpGain, goldGain = loser.mobXP, loser.mobGold
 		}
-	}
-	if winner != nil {
-		winGain = rules.KillXPReward
-		winner.char.Gold += rules.KillGoldReward
-		rules.ApplyXP(&winner.char, winGain) // montée de niveau (points d'attribut/technique)
-		// Série de kills sans quitter la zone → point parfait (orange/red).
+		winGain = xpGain
+		winner.char.Gold += goldGain
+		rules.ApplyXP(&winner.char, xpGain) // montée de niveau (points)
 		if thr := rules.PerfectKillThreshold(z.meta.Tier); thr > 0 {
 			winner.streak++
 			if winner.streak >= thr {
@@ -263,32 +324,40 @@ func (z *Zone) handleDeath(c *combat, winnerID, loserID string) {
 		z.sendCharUpdate(winner)
 	}
 
-	homeZone := z.meta.ID // repli défensif si le village est inconnu
-	if loser != nil && loser.char.HomeZoneID != 0 {
-		homeZone = loser.char.HomeZoneID
-	}
-	respawn := &RespawnInfo{CharacterID: loserID, ZoneID: homeZone, X: 0, Y: 0, HP: 0, XP: newXP}
-	if loser != nil {
-		respawn.HP = loser.char.MaxHP
-	}
-	z.sendBoth(c, protocol.TypeCombatEnd, CombatEndData{
-		CombatID: c.id, Winner: winnerID, Loser: loserID, Reason: "death",
-		Respawn: respawn, XPLost: xpLost, WinnerXPGain: winGain,
-	})
+	end := CombatEndData{CombatID: c.id, Winner: winnerID, Loser: loserID, Reason: "death", WinnerXPGain: winGain}
 
+	// Prépare la relocalisation d'un perdant joueur (pénalité d'XP par palier).
+	var relocate *domain.Character
+	if loser != nil && !loser.isMob {
+		xpLost := int64(float64(loser.char.XP) * z.meta.DeathXPLoss)
+		newXP := loser.char.XP - xpLost
+		if newXP < 0 {
+			newXP = 0
+		}
+		homeZone := z.meta.ID
+		if loser.char.HomeZoneID != 0 {
+			homeZone = loser.char.HomeZoneID
+		}
+		end.XPLost = xpLost
+		end.Respawn = &RespawnInfo{CharacterID: loserID, ZoneID: homeZone, X: 0, Y: 0, HP: loser.char.MaxHP, XP: newXP}
+		r := loser.char
+		r.HP, r.XP, r.ZoneID, r.X, r.Y = loser.char.MaxHP, newXP, homeZone, 0, 0
+		relocate = &r
+	}
+
+	z.sendBoth(c, protocol.TypeCombatEnd, end) // les deux sont encore membres
 	z.setCooldown(winnerID)
 	z.clearCombat(c)
 
-	// Relocalise le perdant vers son village (hors de cette zone).
+	// Retrait du perdant.
 	if loser != nil {
-		relocated := loser.char
-		relocated.HP = loser.char.MaxHP
-		relocated.XP = newXP
-		relocated.ZoneID = homeZone
-		relocated.X, relocated.Y = 0, 0
 		delete(z.members, loserID)
 		z.left = append(z.left, loserID)
-		loser.client.Relocate(relocated)
+		if loser.isMob {
+			z.mobRespawns = append(z.mobRespawns, z.tick+z.mobRespawnTicks)
+		} else if relocate != nil {
+			loser.client.Relocate(*relocate)
+		}
 	}
 }
 

@@ -40,17 +40,23 @@ const (
 	PotionCost = 25
 	PotionHeal = 50
 
-	// Formules de combat.
-	DmgMitFactor = 0.6 // dégâts = puissance − 0,6 × réduction
+	// Formules de combat. Dégâts = échelle × puissance − facteur × réduction.
+	DamageScale  = 1.4
+	DmgMitFactor = 0.5
 	DmgFloor     = 1
 	FleeBase     = 0.20
 	FleeScale    = 0.03
 
 	// Techniques : l'affinité (stat du village) pèse lourd, mais les deux autres
-	// attributs comptent aussi.
-	TechSpecW     = 0.6
+	// attributs comptent aussi. Nettement plus fortes qu'une attaque normale.
+	TechSpecW     = 0.65
 	TechOtherW    = 0.25
-	TechMitFactor = 0.35
+	TechMitFactor = 0.30
+
+	// IA des mobs : fuir si les PV tombent sous ce seuil et que l'adversaire est
+	// encore vaillant.
+	MobFleeHPPct = 30
+	MobOppHPPct  = 40
 )
 
 var (
@@ -75,7 +81,7 @@ func FleeVal(c domain.Character) float64 { return 0.5*c.Agi + 0.3*c.Str + 0.2*c.
 
 // Damage : dégâts d'une attaque normale.
 func Damage(attacker, defender domain.Character) int {
-	return floorAtLeast(Power(attacker)-DmgMitFactor*Mitig(defender), DmgFloor)
+	return floorAtLeast(DamageScale*Power(attacker)-DmgMitFactor*Mitig(defender), DmgFloor)
 }
 
 // FleeChance : probabilité de réussir une fuite.
@@ -97,20 +103,48 @@ type Technique struct {
 
 var techniques = map[string][]Technique{
 	"feu": {
-		{ID: "feu1", Name: "Flamme ardente", Cost: 15, Mult: 1.4},
-		{ID: "feu2", Name: "Déflagration", Cost: 26, Mult: 1.9},
-		{ID: "feu3", Name: "Météore infernal", Cost: 42, Mult: 2.6},
+		{ID: "feu1", Name: "Flamme ardente", Cost: 15, Mult: 1.7},
+		{ID: "feu2", Name: "Déflagration", Cost: 26, Mult: 2.3},
+		{ID: "feu3", Name: "Météore infernal", Cost: 42, Mult: 3.1},
 	},
 	"eau": {
-		{ID: "eau1", Name: "Lame liquide", Cost: 15, Mult: 1.4},
-		{ID: "eau2", Name: "Raz-de-marée", Cost: 26, Mult: 1.9},
-		{ID: "eau3", Name: "Abysse déchaîné", Cost: 42, Mult: 2.6},
+		{ID: "eau1", Name: "Lame liquide", Cost: 15, Mult: 1.7},
+		{ID: "eau2", Name: "Raz-de-marée", Cost: 26, Mult: 2.3},
+		{ID: "eau3", Name: "Abysse déchaîné", Cost: 42, Mult: 3.1},
 	},
 	"terre": {
-		{ID: "ter1", Name: "Éclat rocheux", Cost: 15, Mult: 1.4},
-		{ID: "ter2", Name: "Séisme", Cost: 26, Mult: 1.9},
-		{ID: "ter3", Name: "Colosse de pierre", Cost: 42, Mult: 2.6},
+		{ID: "ter1", Name: "Éclat rocheux", Cost: 15, Mult: 1.7},
+		{ID: "ter2", Name: "Séisme", Cost: 26, Mult: 2.3},
+		{ID: "ter3", Name: "Colosse de pierre", Cost: 42, Mult: 3.1},
 	},
+}
+
+// ── Mobs PvE ────────────────────────────────────────────────────────────────
+
+// MobSpec décrit un type de mob selon le palier de la zone. Ils rapportent moins
+// d'XP et d'or qu'un joueur.
+type MobSpec struct {
+	Name  string
+	Str   float64
+	Def   float64
+	Agi   float64
+	HP    int
+	XP    int64
+	Gold  int64
+	Count int // nombre de mobs présents dans la zone
+}
+
+var mobSpecs = map[string]MobSpec{
+	"green":  {Name: "Lutin des prés", Str: 6, Def: 6, Agi: 6, HP: 34, XP: 8, Gold: 5, Count: 3},
+	"orange": {Name: "Maraudeur", Str: 12, Def: 10, Agi: 9, HP: 62, XP: 16, Gold: 12, Count: 3},
+	"red":    {Name: "Damné", Str: 17, Def: 14, Agi: 13, HP: 95, XP: 26, Gold: 22, Count: 4},
+}
+
+// MobSpecFor retourne la spec de mob d'un palier (ok=false si le palier n'a pas
+// de mobs — village).
+func MobSpecFor(tier string) (MobSpec, bool) {
+	s, ok := mobSpecs[tier]
+	return s, ok
 }
 
 // TechniquesFor retourne les techniques disponibles pour un élément.

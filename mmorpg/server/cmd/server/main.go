@@ -152,6 +152,7 @@ func buildWorld(zones []store.ZoneInfo, links []store.ZoneLink) (map[int]zone.Zo
 			Tier:        z.Tier,
 			PvP:         z.PvPEnabled,
 			DeathXPLoss: deathXPLoss(z.Tier),
+			MobTier:     mobTier(z.Tier),
 		}
 	}
 
@@ -181,5 +182,15 @@ func deathXPLoss(tier string) float64 {
 		return 1.0
 	default:
 		return 0
+	}
+}
+
+// mobTier indique le palier de mobs à faire apparaître (aucun au village).
+func mobTier(tier string) string {
+	switch tier {
+	case "green", "orange", "red":
+		return tier
+	default:
+		return ""
 	}
 }

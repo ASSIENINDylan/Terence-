@@ -264,8 +264,8 @@ renvoie au village.
   gouvernés par les stats, **mort → réapparition au Village de l'Eau**, **−½ XP**
   (100 → 50) persistée, vainqueur récompensé (+50 XP).
 
-> Portée : les mobs PvE et le gain d'XP hors combat viendront plus tard ; l'XP se
-> gagne pour l'instant en remportant un combat.
+> Les zones à paliers sont désormais peuplées de **mobs PvE** (voir plus bas) :
+> l'XP et l'or se gagnent en les affrontant, en plus du PvP.
 
 ## Progression, académie & techniques (serveur)
 
@@ -275,8 +275,9 @@ maquette). Toutes les valeurs chiffrées sont regroupées dans `internal/rules`
 
 - **Statistiques flottantes** : attaque/défense/agilité en `double precision`
   (l'académie fait varier de 0,5).
-- **Formules** :
-  - dégâts = `0,5·att + 0,3·déf + 0,2·agi` − `0,6 ×` réduction adverse ;
+- **Formules** (dégâts rehaussés pour des combats plus tranchants) :
+  - puissance = `0,5·att + 0,3·déf + 0,2·agi` ;
+  - dégâts = `1,4 ×` puissance − `0,5 ×` réduction adverse ;
   - réduction = `0,5·déf + 0,3·agi + 0,2·att` ; fuite = `0,5·agi + 0,3·att + 0,2·déf`.
 - **Montée de niveau** (lente) : XP requise = `50 × niveau`. Chaque niveau donne
   un **point d'attribut** ; un **point de technique** tous les 5 niveaux ; les PV
@@ -291,7 +292,9 @@ maquette). Toutes les valeurs chiffrées sont regroupées dans `internal/rules`
   village mais pas seulement** (les deux autres attributs comptent aussi).
 - **Or & boutique** (village) : les kills rapportent de l'or ; potions de soin à
   l'achat, utilisables au combat.
-- **Énergie** : restaurée au village, regagnée à chaque tour de combat.
+- **Énergie** : restaurée **uniquement au sanctuaire du village** (à l'entrée).
+  Elle ne se régénère **plus** pendant le combat : lancer des techniques oblige
+  donc à retourner au village pour refaire le plein.
 - **Messages** : `char.update` (fiche complète à chaque changement),
   `char.spend_attr`, `char.learn_tech`, `char.buy_potion`, `char.use_potion`,
   et `combat.action` avec `tech_id` pour lancer une technique.
@@ -301,14 +304,41 @@ maquette). Toutes les valeurs chiffrées sont regroupées dans `internal/rules`
 > automatiquement) — la fenêtre de confirmation est donc une décision du client
 > (implémentée dans la maquette).
 
-> Restent à porter : les **mobs PvE** (entités serveur + IA de combat) — un
-> système à part, prévu ensuite. L'XP/l'or se gagnent pour l'instant en PvP.
-
 **Validé de bout en bout** (PostgreSQL 16 + Redis 7) : fiche `char.update` à
 l'entrée (stats, énergie, catalogue de techniques) ; académie (att 15→17, déf/agi
-−0,5) ; temple (apprentissage de `feu1`) ; technique en combat (**17 dégâts** vs
-6 pour une attaque normale, énergie 50→35). `go test -race` vert (dont le package
-`rules`).
+−0,5) ; temple (apprentissage de `feu1`) ; technique en combat vs attaque normale,
+énergie consommée puis **non régénérée** avant retour au village. `go test -race`
+vert (dont les packages `rules` et `zone`).
+
+## Mobs PvE & IA de combat (serveur)
+
+Les zones à paliers sont désormais **peuplées de mobs** hostiles, entités
+gérées entièrement côté serveur. Toutes leurs valeurs sont dans `internal/rules`
+(`mobSpecs`).
+
+- **Peuplement par palier** : chaque zone `vert`/`orange`/`rouge` fait apparaître
+  ses mobs au démarrage (vert : 3 *Lutins des prés* ; orange : 3 *Maraudeurs* ;
+  rouge : 4 *Damnés*), de plus en plus coriaces et généreux en XP/or. Le
+  **village n'a pas de mobs** (sanctuaire). Un mob tué **réapparaît** après un
+  court délai, gardant les zones vivantes.
+- **Représentation unifiée** : un mob est un membre de zone comme un autre
+  (`isMob`), sans socket réelle. Détection de rencontre, tour par tour, dégâts,
+  mort et récompenses passent par le **même code** que le PvP — un mob rapporte
+  simplement **moins** d'XP/d'or qu'un joueur.
+- **Rencontre PvE** : dans toute zone peuplée, s'approcher d'un mob **engage
+  automatiquement** un combat 1v1 (le PvP reste réservé aux factions opposées en
+  zone PvP).
+- **IA de combat** : à son tour, un mob **réfléchit** puis agit seul — il
+  **frappe** normalement, mais **fuit** quand ses PV tombent bas (< 30 %) et que
+  l'adversaire est encore vaillant (> 40 % PV). L'initiative reste gouvernée par
+  l'agilité.
+- **Récompense** : vaincre un mob rapporte son XP/or (montée de niveau,
+  progression des séries de kills parfaits comme en PvP). Aucune pénalité pour le
+  joueur ; le mob, lui, disparaît puis réapparaît.
+
+> **Validé** par tests `-race` sur le package `zone` : peuplement d'une zone
+> verte, rencontre PvE déclenchée, IA du mob jouant seule ses tours, mort du mob,
+> récompense en or via `char.update`, puis réapparition programmée.
 
 ## Démarrage rapide
 

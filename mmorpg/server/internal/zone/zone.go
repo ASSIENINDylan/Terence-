@@ -11,6 +11,8 @@
 package zone
 
 import (
+	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -29,6 +31,10 @@ const (
 	turnTimeoutSec   = 15
 	engageCooldown   = 3
 	transitionRadius = 45 // distance max d'un portail pour l'emprunter
+	mobThinkSec      = 1  // délai de « réflexion » d'un mob avant d'agir
+	mobRespawnSec    = 6  // délai avant réapparition d'un mob mort
+	mobWanderMinSec  = 2  // errance : nouvelle direction toutes les 2–5 s
+	mobWanderMaxSec  = 5
 )
 
 // Sender pousse un message à un joueur.
@@ -69,6 +75,7 @@ type ZoneMeta struct {
 	Tier        string // village | green | orange | red
 	PvP         bool
 	DeathXPLoss float64 // fraction d'XP perdue à la mort (0, 0.5, 1)
+	MobTier     string  // palier de mobs à faire apparaître ("" = aucun)
 	Portals     []Portal
 }
 
@@ -95,12 +102,14 @@ type EntityState struct {
 	MaxHP       int    `json:"max_hp"`
 	X           int    `json:"x"`
 	Y           int    `json:"y"`
+	Mob         bool   `json:"mob,omitempty"`
 }
 
-func entityStateOf(c domain.Character) EntityState {
+func entityStateOfMember(m *member) EntityState {
+	c := m.char
 	return EntityState{
 		CharacterID: c.ID, Name: c.Name, FactionID: c.FactionID,
-		Level: c.Level, HP: c.HP, MaxHP: c.MaxHP, X: c.X, Y: c.Y,
+		Level: c.Level, HP: c.HP, MaxHP: c.MaxHP, X: c.X, Y: c.Y, Mob: m.isMob,
 	}
 }
 
@@ -141,9 +150,22 @@ type member struct {
 	combatID      string
 	cooldownUntil uint64
 	streak        int // kills consécutifs dans cette zone (points parfaits)
+
+	// Mob PvE (nil client). Un mob erre, engage les joueurs et est piloté par
+	// l'IA en combat.
+	isMob       bool
+	mobXP       int64
+	mobGold     int64
+	wanderUntil uint64
 }
 
 func (m *member) inCombat() bool { return m.combatID != "" }
+
+// nopClient est le « client » d'un mob : il ignore messages et relocalisations.
+type nopClient struct{}
+
+func (nopClient) SendEnvelope(string, uint64, any) {}
+func (nopClient) Relocate(domain.Character)        {}
 
 // Zone est un acteur : sa goroutine loop() possède tout l'état ci-dessous.
 type Zone struct {
@@ -162,9 +184,14 @@ type Zone struct {
 	left   []string
 	dirty  map[string]bool
 
+	mobN        int
+	mobRespawns []uint64 // ticks auxquels réapparaît un mob
+
 	tick             uint64
 	turnTimeoutTicks uint64
 	cooldownTicks    uint64
+	mobThinkTicks    uint64
+	mobRespawnTicks  uint64
 	rng              *rand.Rand
 }
 
@@ -183,10 +210,67 @@ func newZone(meta ZoneMeta, hz int) *Zone {
 
 		turnTimeoutTicks: uint64(turnTimeoutSec * hz),
 		cooldownTicks:    uint64(engageCooldown * hz),
+		mobThinkTicks:    uint64(mobThinkSec * hz),
+		mobRespawnTicks:  uint64(mobRespawnSec * hz),
 		rng:              rand.New(rand.NewSource(int64(meta.ID)*7919 + time.Now().UnixNano())),
+	}
+	// Peuplement initial en mobs (avant le démarrage de la boucle : sûr).
+	if spec, ok := rules.MobSpecFor(meta.MobTier); ok {
+		for i := 0; i < spec.Count; i++ {
+			z.spawnMob()
+		}
 	}
 	go z.loop()
 	return z
+}
+
+// spawnMob ajoute un mob à une position aléatoire (appelé dans la goroutine de
+// la zone, ou avant son démarrage).
+func (z *Zone) spawnMob() {
+	spec, ok := rules.MobSpecFor(z.meta.MobTier)
+	if !ok {
+		return
+	}
+	z.mobN++
+	id := fmt.Sprintf("mob-%d-%d", z.meta.ID, z.mobN)
+	ang := z.rng.Float64() * 2 * math.Pi
+	d := 60 + z.rng.Float64()*float64(worldBound/3)
+	ch := domain.Character{
+		ID: id, Name: spec.Name, Level: 1, FactionID: 0,
+		HP: spec.HP, MaxHP: spec.HP, Str: spec.Str, Def: spec.Def, Agi: spec.Agi,
+		ZoneID: z.meta.ID, X: clamp(int(math.Cos(ang) * d)), Y: clamp(int(math.Sin(ang) * d)),
+	}
+	z.members[id] = &member{char: ch, client: nopClient{}, isMob: true, mobXP: spec.XP, mobGold: spec.Gold}
+	z.joined = append(z.joined, id)
+}
+
+// wanderMobs fait choisir aux mobs libres une direction d'errance périodique.
+func (z *Zone) wanderMobs() {
+	for _, m := range z.members {
+		if !m.isMob || m.inCombat() {
+			continue
+		}
+		if z.tick >= m.wanderUntil {
+			m.intent = Intent{DX: z.rng.Intn(3) - 1, DY: z.rng.Intn(3) - 1}
+			m.wanderUntil = z.tick + uint64(mobWanderMinSec*z.hz) + uint64(z.rng.Intn((mobWanderMaxSec-mobWanderMinSec)*z.hz+1))
+		}
+	}
+}
+
+// processMobRespawns fait réapparaître les mobs vaincus dont le délai est écoulé.
+func (z *Zone) processMobRespawns() {
+	if len(z.mobRespawns) == 0 {
+		return
+	}
+	remaining := z.mobRespawns[:0]
+	for _, at := range z.mobRespawns {
+		if z.tick >= at {
+			z.spawnMob()
+		} else {
+			remaining = append(remaining, at)
+		}
+	}
+	z.mobRespawns = remaining
 }
 
 func (z *Zone) loop() {
@@ -207,6 +291,8 @@ func (z *Zone) loop() {
 func (z *Zone) doTick() {
 	z.tick++
 
+	z.wanderMobs() // les mobs choisissent une direction d'errance
+
 	var moved []MovedEntity
 	for id, m := range z.members {
 		if m.inCombat() || (m.intent.DX == 0 && m.intent.DY == 0) {
@@ -220,7 +306,8 @@ func (z *Zone) doTick() {
 		}
 	}
 
-	z.resolveTimedOutTurns()
+	z.resolveTimedOutTurns() // joueurs inactifs → attaque auto
+	z.resolveMobTurns()      // mobs → action pilotée par l'IA
 
 	for id := range z.dirty {
 		if m, ok := z.members[id]; ok {
@@ -229,12 +316,13 @@ func (z *Zone) doTick() {
 		delete(z.dirty, id)
 	}
 
+	z.processMobRespawns() // réapparition des mobs vaincus
 	z.detectEncounters()
 
 	var joined []EntityState
 	for _, id := range z.joined {
 		if m, ok := z.members[id]; ok {
-			joined = append(joined, entityStateOf(m.char))
+			joined = append(joined, entityStateOfMember(m))
 		}
 	}
 	left := z.left
@@ -254,7 +342,7 @@ func (z *Zone) doTick() {
 func (z *Zone) snapshotFor(charID string) SnapshotData {
 	entities := make([]EntityState, 0, len(z.members))
 	for _, m := range z.members {
-		entities = append(entities, entityStateOf(m.char))
+		entities = append(entities, entityStateOfMember(m))
 	}
 	return SnapshotData{
 		ZoneID: z.meta.ID, ZoneName: z.meta.Name, Tier: z.meta.Tier, PvP: z.meta.PvP,
