@@ -49,9 +49,10 @@ const (
 	// après tout changement (ramassage, équipement, usage).
 	TypeInventory = "char.inventory"
 	// Actions d'inventaire (client→serveur), toutes avec {item_id}.
-	TypeItemPickup = "item.pickup" // ramasser un objet au sol
-	TypeItemEquip  = "item.equip"  // équiper/déséquiper une arme/armure
-	TypeItemUse    = "item.use"    // consommer un objet (potion/élixir)
+	TypeItemPickup = "item.pickup"   // ramasser un objet au sol
+	TypeItemEquip  = "item.equip"    // équiper/déséquiper une arme/armure
+	TypeItemUse    = "item.use"      // consommer un objet (potion/élixir)
+	TypeBuyItem    = "char.buy_item" // acheter une arme/armure au forgeron {code}
 	// TypeEcho est renvoyé par le serveur en écho d'un message reçu (T2).
 	TypeEcho = "echo"
 	// TypeError signale une erreur applicative sur la connexion.

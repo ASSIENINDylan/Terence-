@@ -101,6 +101,30 @@ func (m *Manager) UseItem(char domain.Character, itemID string) {
 	}
 }
 
+// BuyItem achète une arme/armure au forgeron (service du village).
+func (m *Manager) BuyItem(char domain.Character, code string) {
+	if z := m.lookup(char.ZoneID); z != nil {
+		z.villageAction(char.ID, func(mem *member) { z.buyItem(mem, code) })
+	}
+}
+
+func (z *Zone) buyItem(mem *member, code string) {
+	price, ok := rules.ItemPrice(code)
+	t, ok2 := z.cat.ByCode(code)
+	if !ok || !ok2 || !rules.IsEquipable(t.Type) {
+		mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "unknown_item", Message: "objet indisponible à la forge"})
+		return
+	}
+	if mem.char.Gold < price {
+		mem.client.SendEnvelope(protocol.TypeError, 0, protocol.ErrorData{Code: "not_enough_gold", Message: "pas assez d'or"})
+		return
+	}
+	mem.char.Gold -= price
+	mem.char.Inventory = append(mem.char.Inventory, domain.InventoryItem{ID: newUUID(), TemplateID: t.ID, Quantity: 1})
+	z.sendInventory(mem)
+	z.sendCharUpdate(mem)
+}
+
 func (z *Zone) pickupItem(charID, itemID string) {
 	mem := z.members[charID]
 	if mem == nil {

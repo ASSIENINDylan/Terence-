@@ -183,6 +183,13 @@ func (s *session) handle(env protocol.Envelope) {
 		}
 		s.gw.world.UseItem(s.getChar(), p.ItemID)
 
+	case protocol.TypeBuyItem:
+		var p buyItemPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.BuyItem(s.getChar(), p.Code)
+
 	case protocol.TypeZoneTransition:
 		var t transitionPayload
 		if err := env.DecodeData(&t); err != nil {

@@ -205,3 +205,18 @@ func TestLootCodesFor(t *testing.T) {
 		t.Fatal("le village ne devrait rien lâcher")
 	}
 }
+
+func TestSmithPricesAndStock(t *testing.T) {
+	if p, ok := ItemPrice("epee_courte"); !ok || p != 90 {
+		t.Fatalf("prix de l'épée courte attendu 90, obtenu %d (ok=%v)", p, ok)
+	}
+	if _, ok := ItemPrice("potion_soin"); ok {
+		t.Fatal("une potion ne devrait pas être vendue à la forge")
+	}
+	if len(SmithStock(domain.ItemWeapon)) != 3 || len(SmithStock(domain.ItemArmor)) != 3 {
+		t.Fatal("chaque forgeron devrait proposer 3 objets")
+	}
+	if SmithStock(domain.ItemConsumable) != nil {
+		t.Fatal("aucun forgeron ne vend de consommable")
+	}
+}

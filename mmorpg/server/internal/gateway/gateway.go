@@ -54,6 +54,7 @@ type World interface {
 	PickupItem(char domain.Character, itemID string)
 	EquipItem(char domain.Character, itemID string)
 	UseItem(char domain.Character, itemID string)
+	BuyItem(char domain.Character, code string)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -164,6 +165,11 @@ type transitionPayload struct {
 // itemActionPayload : action d'inventaire (ramasser/équiper/utiliser).
 type itemActionPayload struct {
 	ItemID string `json:"item_id"`
+}
+
+// buyItemPayload : achat d'un objet au forgeron (par code).
+type buyItemPayload struct {
+	Code string `json:"code"`
 }
 
 // loadCharacter charge (ou crée) le personnage du compte. Retourne false si le

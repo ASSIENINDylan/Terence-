@@ -68,6 +68,7 @@ var (
 	ErrAlreadyLearned  = errors.New("rules: technique déjà apprise")
 	ErrNotConsumable   = errors.New("rules: objet non consommable")
 	ErrNoHeal          = errors.New("rules: déjà à pleine santé")
+	ErrNotForSale      = errors.New("rules: objet non disponible à la forge")
 )
 
 // ── Formules dérivées (attaque / défense / agilité) ─────────────────────────
@@ -204,6 +205,31 @@ func ConsumeHeal(c *domain.Character, t domain.ItemTemplate) (int, error) {
 	}
 	c.HP += heal
 	return heal, nil
+}
+
+// ── Forgerons (boutiques d'équipement du village) ───────────────────────────
+
+// itemPrices : prix en or des objets forgeables. Le forgeron d'armes vend les
+// armes, le forgeron d'armures les armures.
+var itemPrices = map[string]int64{
+	"dague_usee": 30, "epee_courte": 90, "lame_ardente": 220,
+	"tunique_cuir": 30, "cotte_mailles": 90, "armure_plaques": 220,
+}
+
+// ItemPrice retourne le prix d'un objet forgeable (ok=false s'il n'est pas en
+// vente).
+func ItemPrice(code string) (int64, bool) { p, ok := itemPrices[code]; return p, ok }
+
+// SmithStock retourne les codes vendus par un forgeron selon le type d'objet
+// (arme ou armure), du moins cher au plus cher.
+func SmithStock(kind domain.ItemType) []string {
+	switch kind {
+	case domain.ItemWeapon:
+		return []string{"dague_usee", "epee_courte", "lame_ardente"}
+	case domain.ItemArmor:
+		return []string{"tunique_cuir", "cotte_mailles", "armure_plaques"}
+	}
+	return nil
 }
 
 // lootTables : codes d'objets que peut lâcher un mob, par palier de zone.
