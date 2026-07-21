@@ -12,10 +12,11 @@
     --feu: #ff6b4a; --eau: #4f8cff; --terre: #7bcf5c; --mob: #ff5d6c;
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--txt);
     font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    overflow: hidden;
+    overflow: hidden; display: flex; flex-direction: column;
   }
   header {
     padding: 10px 16px; border-bottom: 1px solid var(--line);
@@ -52,10 +53,10 @@
   .status.ok { color: var(--ok); } .status.err { color: var(--err); }
 
   /* ── Jeu ── */
-  #game { display: none; grid-template-columns: 1fr 300px; gap: 12px; padding: 12px 16px; height: calc(100vh - 52px); }
-  #stage { position: relative; }
-  #view { width: 100%; height: 100%; display: block; background: #0b1120; border: 1px solid var(--line); border-radius: 10px; }
-  .side { overflow-y: auto; padding-right: 4px; }
+  #game { display: none; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; padding: 12px 16px; flex: 1 1 auto; min-height: 0; }
+  #stage { position: relative; min-width: 0; min-height: 0; }
+  #view { width: 100%; height: 100%; display: block; background: #0b1120; border: 1px solid var(--line); border-radius: 10px; cursor: crosshair; }
+  .side { overflow-y: auto; padding-right: 4px; min-height: 0; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
   .card h3 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
 
@@ -123,7 +124,7 @@
 <!-- ══════════ Jeu ══════════ -->
 <header style="display:none" id="topbar">
   <h1>⚔️ MMORPG v0.1</h1>
-  <span class="sub">ZQSD / WASD / flèches pour marcher · <b>E</b> ramasser · <b>T</b> traverser un portail</span>
+  <span class="sub"><b>Clic droit</b> : se déplacer · <b>clic gauche</b> (glisser) : tourner la caméra · <b>molette</b> : zoom · <b>E</b> ramasser · <b>T</b> portail</span>
   <span style="margin-left:auto;display:flex;align-items:center;gap:10px">
     état : <span id="wsState" class="pill off">déconnecté</span>
     <button id="btnQuit" class="sm ghost">Se déconnecter</button>
@@ -403,6 +404,7 @@
 
   // ── Combat ──
   function onCombatStart(d) {
+    keys.clear(); clearMoveTarget(); // le combat immobilise : on coupe le pilotage
     const opp = d.opponents.find(o => o.character_id !== S.self);
     const me = d.opponents.find(o => o.character_id === S.self);
     S.combat = { id: d.combat_id, me, opp, turn: d.turn };
@@ -469,35 +471,24 @@
   $("btnFlee").onclick = () => send("combat.action", { action: "flee" });
   $("btnTech").onclick = () => { const m = $("techMenu"); m.style.display = m.style.display === "flex" ? "none" : "flex"; };
 
-  // ── Déplacement clavier ──
+  // ── Déplacement clavier (directions relatives à la caméra, résolues dans la
+  // boucle d'animation ; le clic droit pilote aussi le déplacement) ──
   const keys = new Set();
-  let lastDir = { dx: 0, dy: 0 };
   const MAP = {
     KeyW: "up", KeyZ: "up", ArrowUp: "up",
     KeyS: "down", ArrowDown: "down",
     KeyA: "left", KeyQ: "left", ArrowLeft: "left",
     KeyD: "right", ArrowRight: "right",
   };
-  function dirFromKeys() {
-    let dx = 0, dy = 0;
-    if (keys.has("up")) dy += 1; if (keys.has("down")) dy -= 1;
-    if (keys.has("left")) dx -= 1; if (keys.has("right")) dx += 1;
-    return { dx, dy };
-  }
-  function pushDir() {
-    const d = dirFromKeys();
-    if (d.dx === lastDir.dx && d.dy === lastDir.dy) return;
-    lastDir = d; send("move.intent", d);
-  }
   window.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
     if (e.code === "KeyE") { tryPickup(); return; }
     if (e.code === "KeyT") { tryTransition(); return; }
     const m = MAP[e.code]; if (!m) return;
-    e.preventDefault(); if (!keys.has(m)) { keys.add(m); pushDir(); }
+    e.preventDefault(); keys.add(m); clearMoveTarget();
   });
-  window.addEventListener("keyup", (e) => { const m = MAP[e.code]; if (!m) return; keys.delete(m); pushDir(); });
-  window.addEventListener("blur", () => { keys.clear(); pushDir(); });
+  window.addEventListener("keyup", (e) => { const m = MAP[e.code]; if (!m) return; keys.delete(m); });
+  window.addEventListener("blur", () => keys.clear());
 
   function me() { return S.entities.get(S.self); }
   function dist2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
@@ -549,6 +540,77 @@
   ground.rotation.x = -Math.PI / 2; scene.add(ground);
   const grid = new THREE.GridHelper(960, 24, 0x4a5a70, 0x2e3a4e);
   grid.position.y = 0.2; grid.material.transparent = true; grid.material.opacity = 0.30; scene.add(grid);
+
+  // ── Contrôles souris : caméra orbitale 360° + déplacement au clic droit ──
+  let camYaw = 0;          // rotation autour du joueur (glisser clic gauche)
+  let camPitch = 0.62;     // hauteur de l'orbite (glisser vertical)
+  let camDist = 175;       // distance (molette)
+  let dragging = false, lastMX = 0, lastMY = 0;
+  let moveTarget = null;   // destination (coordonnées monde serveur)
+
+  // Marqueur de destination au sol (anneau qui pulse).
+  const marker = new THREE.Mesh(new THREE.RingGeometry(3.2, 4.8, 24),
+    new THREE.MeshBasicMaterial({ color: 0x6ee7ff, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
+  marker.rotation.x = -Math.PI / 2; marker.position.y = 0.4; marker.visible = false; scene.add(marker);
+  function clearMoveTarget() { moveTarget = null; marker.visible = false; }
+
+  cv.addEventListener("contextmenu", (e) => e.preventDefault());
+  cv.addEventListener("mousedown", (e) => {
+    if (e.button === 0) { dragging = true; lastMX = e.clientX; lastMY = e.clientY; }
+    else if (e.button === 2) rightClickMove(e);
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    camYaw -= (e.clientX - lastMX) * 0.0055;
+    camPitch = Math.max(0.18, Math.min(1.35, camPitch + (e.clientY - lastMY) * 0.004));
+    lastMX = e.clientX; lastMY = e.clientY;
+  });
+  window.addEventListener("mouseup", (e) => { if (e.button === 0) dragging = false; });
+  cv.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    camDist = Math.max(55, Math.min(430, camDist * (1 + e.deltaY * 0.0012)));
+  }, { passive: false });
+
+  // Clic droit : projette le clic sur le plan du sol → destination.
+  const raycaster = new THREE.Raycaster();
+  const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  function rightClickMove(e) {
+    const r = cv.getBoundingClientRect();
+    const nd = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    raycaster.setFromCamera(nd, camera);
+    const hit = new THREE.Vector3();
+    if (raycaster.ray.intersectPlane(groundPlane, hit)) {
+      moveTarget = { x: Math.max(-480, Math.min(480, hit.x)), y: Math.max(-480, Math.min(480, -hit.z)) };
+      marker.position.set(hit.x, 0.4, hit.z); marker.visible = true;
+    }
+  }
+
+  // ── Pilotage du déplacement (clavier relatif caméra OU cible du clic droit).
+  // Le serveur reste seul maître : on ne lui envoie qu'une direction.
+  let lastSent = { dx: 9, dy: 9 };
+  function sendDir(dx, dy) {
+    if (dx === lastSent.dx && dy === lastSent.dy) return;
+    lastSent = { dx, dy }; send("move.intent", { dx, dy });
+  }
+  function steer() {
+    const p = me(); if (!p) return;
+    let vx = 0, vy = 0;
+    if (keys.size) {
+      let ix = 0, iy = 0;
+      if (keys.has("up")) iy += 1; if (keys.has("down")) iy -= 1;
+      if (keys.has("left")) ix -= 1; if (keys.has("right")) ix += 1;
+      // rotation par le cap de la caméra : « haut » = s'éloigner de la caméra.
+      vx = ix * Math.cos(camYaw) - iy * Math.sin(camYaw);
+      vy = ix * Math.sin(camYaw) + iy * Math.cos(camYaw);
+    } else if (moveTarget) {
+      const dx = moveTarget.x - p.x, dy = moveTarget.y - p.y;
+      if (Math.hypot(dx, dy) < 8) { clearMoveTarget(); sendDir(0, 0); return; }
+      vx = dx; vy = dy;
+    } else { sendDir(0, 0); return; }
+    const len = Math.hypot(vx, vy) || 1;
+    const ux = vx / len, uy = vy / len;
+    sendDir(Math.abs(ux) > 0.38 ? Math.sign(ux) : 0, Math.abs(uy) > 0.38 ? Math.sign(uy) : 0);
+  }
 
   // Thème par palier : couleur du sol, ciel, brouillard, décor.
   const THEME = {
@@ -660,16 +722,22 @@
       e.rx += (e.x - e.rx) * a; e.ry += (e.y - e.ry) * a;
     });
 
+    steer(); // clavier (relatif caméra) ou cible du clic droit → move.intent
     syncEntities(now); syncItems(now); syncPortals();
 
-    // Caméra 3e personne : suit le joueur avec un léger amorti.
+    // Marqueur de destination : pulsation.
+    if (marker.visible) marker.material.opacity = 0.55 + 0.3 * Math.sin(now / 140);
+
+    // Caméra orbitale : yaw/pitch (glisser clic gauche) + distance (molette),
+    // centrée sur le joueur, avec un léger amorti.
     const p = me();
     if (p) {
-      const want = new THREE.Vector3(p.rx, 95, -p.ry + 135);
+      const hr = camDist * Math.cos(camPitch), hh = camDist * Math.sin(camPitch);
+      const want = new THREE.Vector3(p.rx + Math.sin(camYaw) * hr, hh, -p.ry + Math.cos(camYaw) * hr);
       if (!camInit) { camPos.copy(want); camInit = true; }
-      camPos.lerp(want, 1 - Math.exp(-dt / 0.10));
+      camPos.lerp(want, 1 - Math.exp(-dt / 0.09));
       camera.position.copy(camPos);
-      camTarget.set(p.rx, 10, -p.ry);
+      camTarget.set(p.rx, 12, -p.ry);
       camera.lookAt(camTarget);
     }
     renderer.render(scene, camera);
@@ -711,34 +779,58 @@
     return m;
   }
 
-  // Héros : petit chevalier low-poly coloré par l'élément, épée en main.
+  // Héros : silhouette HUMANOÏDE aux proportions humaines, sans arme.
+  // Formes arrondies (capsules/sphères, segments élevés) : torse, bassin,
+  // jambes avec chaussures, bras articulés avec mains, cou, tête et cheveux.
+  const std = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r === undefined ? 0.85 : r });
   function heroMesh(elem) {
     const p = ELEM3D[elem] || ELEM3D.feu;
     const g = new THREE.Group(), u = g.userData;
-    g.add(shadowBlob(7));
-    u.legL = limb(1.6, 6.5, 0x2a2f3e, -2.2, 7); g.add(u.legL);
-    u.legR = limb(1.6, 6.5, 0x2a2f3e, 2.2, 7); g.add(u.legR);
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.8, 9, 10), lam(p.cloak));
-    body.position.y = 11; g.add(body);
-    const belt = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.7, 1.3, 10), lam(p.trim));
-    belt.position.y = 7.4; g.add(belt);
-    u.armL = limb(1.25, 7, p.skin, -5, 15); u.armL.rotation.z = 0.18; g.add(u.armL);
-    u.armR = limb(1.25, 7, p.skin, 5, 15); u.armR.rotation.z = -0.18; g.add(u.armR);
-    const head = new THREE.Mesh(new THREE.SphereGeometry(5.2, 16, 12), lam(p.skin));
-    head.position.y = 20.6; g.add(head);
-    const hair = new THREE.Mesh(new THREE.SphereGeometry(5.45, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2.1), lam(p.hair));
-    hair.position.y = 20.9; g.add(hair);
-    const eye = (x) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.85, 8, 8), new THREE.MeshBasicMaterial({ color: 0x1a2030 })); m.position.set(x, 20.6, 4.5); g.add(m); };
-    eye(-1.9); eye(1.9);
-    // épée (lame + garde) dans la main droite, pointée vers l'avant
-    const sword = new THREE.Group();
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.8, 11, 2.2),
-      new THREE.MeshStandardMaterial({ color: 0xdfe7f5, metalness: 0.75, roughness: 0.3 }));
-    blade.position.y = 6.2; sword.add(blade);
-    const guard = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 4.6), lam(p.trim));
-    guard.position.y = 0.8; sword.add(guard);
-    sword.position.set(6.4, 8.6, 1.2); sword.rotation.x = -0.5;
-    g.add(sword);
+    g.add(shadowBlob(6.5));
+
+    // Jambes : pivot à la hanche (cuisse+mollet en capsule, chaussure).
+    const leg = (x) => {
+      const grp = new THREE.Group(); grp.position.set(x, 9.8, 0);
+      const th = new THREE.Mesh(new THREE.CapsuleGeometry(1.35, 6.6, 6, 14), std(0x2b3040));
+      th.position.y = -4.7; grp.add(th);
+      const shoe = new THREE.Mesh(new THREE.SphereGeometry(1.5, 12, 10), std(0x1d222e, 0.6));
+      shoe.scale.set(1, 0.6, 1.55); shoe.position.set(0, -9.1, 0.7); grp.add(shoe);
+      return grp;
+    };
+    u.legL = leg(-2); u.legR = leg(2); g.add(u.legL); g.add(u.legR);
+
+    // Bassin + torse (capsule = épaules arrondies) + ceinture fine.
+    const hips = new THREE.Mesh(new THREE.SphereGeometry(3.1, 16, 12), std(0x2b3040));
+    hips.scale.set(1.12, 0.78, 0.95); hips.position.y = 10.6; g.add(hips);
+    const torso = new THREE.Mesh(new THREE.CapsuleGeometry(3.05, 5.6, 6, 18), std(p.cloak));
+    torso.position.y = 15.8; g.add(torso);
+    const belt = new THREE.Mesh(new THREE.TorusGeometry(3.12, 0.5, 8, 22), std(p.trim, 0.5));
+    belt.rotation.x = Math.PI / 2; belt.position.y = 12.3; g.add(belt);
+
+    // Bras : pivot à l'épaule — épaule, manche courte, avant-bras peau, main.
+    const arm = (x) => {
+      const grp = new THREE.Group(); grp.position.set(x, 18, 0);
+      const sh = new THREE.Mesh(new THREE.SphereGeometry(1.45, 12, 10), std(p.cloak)); grp.add(sh);
+      const up = new THREE.Mesh(new THREE.CapsuleGeometry(1.05, 2.6, 6, 12), std(p.cloak));
+      up.position.y = -2.3; grp.add(up);
+      const fo = new THREE.Mesh(new THREE.CapsuleGeometry(0.9, 3.3, 6, 12), std(p.skin));
+      fo.position.y = -5.8; grp.add(fo);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(1.1, 10, 8), std(p.skin));
+      hand.position.y = -8.2; grp.add(hand);
+      grp.rotation.z = x < 0 ? 0.09 : -0.09;
+      return grp;
+    };
+    u.armL = arm(-4.1); u.armR = arm(4.1); g.add(u.armL); g.add(u.armR);
+
+    // Cou + tête (proportion humaine ≈ 1/7 du corps) + cheveux + yeux.
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.2, 1.8, 12), std(p.skin));
+    neck.position.y = 20; g.add(neck);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(3.5, 22, 18), std(p.skin));
+    head.position.y = 23.8; g.add(head);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(3.68, 22, 14, 0, Math.PI * 2, 0, Math.PI / 1.9), std(p.hair));
+    hair.position.y = 24.1; hair.rotation.x = -0.14; g.add(hair);
+    const eye = (x) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.48, 8, 8), new THREE.MeshBasicMaterial({ color: 0x141a26 })); m.position.set(x, 24, 3.2); g.add(m); };
+    eye(-1.2); eye(1.2);
     return g;
   }
 
