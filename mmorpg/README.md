@@ -22,7 +22,7 @@ build `T0 → T8` du plan technique.
 | **T3** | Personnage persistant + entrée en zone + `zone.snapshot`. | ✅ **fait** |
 | **T4** | Boucle de tick + `move.intent` → position serveur → `zone.delta`. | ✅ **fait** |
 | **T5** | Combat autoritatif au tour par tour, déclenché par la rencontre. | ✅ **fait** |
-| T6 | Inventaire : templates + exemplaires, ramasser/équiper/utiliser. | à venir |
+| **T6** | Inventaire : templates + exemplaires, ramasser/équiper/utiliser. | ✅ **fait** |
 | T7 | Chat (global + faction) via pub/sub Redis + appartenance village. | à venir |
 | T8 | Persistance robuste : write-back périodique + flush à la déconnexion + métriques. | à venir |
 
@@ -340,6 +340,46 @@ gérées entièrement côté serveur. Toutes leurs valeurs sont dans `internal/r
 > verte, rencontre PvE déclenchée, IA du mob jouant seule ses tours, mort du mob,
 > récompense en or via `char.update`, puis réapparition programmée.
 
+## T6 — Inventaire : objets, butin, équipement (serveur)
+
+Boucle d'objets complète (§8), branchée sur les mobs et le combat. Le
+**catalogue** immuable (migration `0005`) et les valeurs de butin sont des
+données de référence ; toute la logique réglable (bonus, table de butin, soin)
+vit dans `internal/rules`.
+
+- **Catalogue vs exemplaires** : `item_templates` (armes, armures,
+  consommables ; stats en `jsonb`) est le catalogue ; `inventory_items` porte
+  les **exemplaires possédés**, chacun avec un **identifiant unique** —
+  pilier de l'anti-duplication (§8).
+- **Ramasser** : à sa mort, un mob **lâche un objet au sol** (butin par palier :
+  vert → dague/tunique/potion, orange → épée/cotte/potion, rouge →
+  lame/armure/élixir). L'objet apparaît dans le `zone.snapshot`/`zone.delta` ;
+  le joueur proche envoie `item.pickup` pour l'ajouter à son inventaire (les
+  consommables **s'empilent**).
+- **Équiper** : `item.equip` équipe/déséquipe une arme ou une armure (une seule
+  par emplacement). Les **statistiques effectives** = base + bonus d'équipement,
+  recalculées à chaque changement : le combat (attaques **et** techniques) frappe
+  avec les stats effectives. Le `char.update` porte les bonus (`str_bonus`…).
+- **Utiliser** : `item.use` consomme une potion/élixir et **soigne** ; l'objet
+  est décrémenté puis retiré à épuisement.
+- **Persistance** : l'inventaire autoritatif vit dans l'acteur de zone ; il est
+  **rechargé à l'entrée** et **ré-écrit** (transactionnellement, exemplaires
+  conservant leur id) à la déconnexion et aux transitions.
+- **Messages** : `char.inventory` (fiche d'inventaire à chaque changement) ;
+  `item.pickup` / `item.equip` / `item.use` (tous `{item_id}`).
+
+> **Correctif de robustesse** au passage : `Conn` signalait sa fermeture en
+> **fermant** son canal d'envoi, ce qui faisait **paniquer** un envoi concurrent
+> depuis un acteur de zone (« send on closed channel »). La fermeture passe
+> désormais par un canal `done` distinct ; `send` n'est jamais fermé.
+
+**Validé de bout en bout** (PostgreSQL 16 + Redis 7) via le `smoketest` : un mob
+tué **lâche un objet**, le joueur le **ramasse** (`char.inventory` reçu),
+l'**équipe** (bonus reflété dans `char.update`), le mob **réapparaît** ; les
+exemplaires équipés sont **persistés** en base (`inventory_items`). Tests
+`-race` sur `rules` (bonus/soin/butin) et `zone` (ramassage → équipement →
+statistiques effectives ; potion → soin).
+
 ## Démarrage rapide
 
 ### Avec docker compose (recommandé)
@@ -447,8 +487,9 @@ mmorpg/
       httpapi/                  # API HTTP : health check + auth + route /ws
       gateway/                  # WebSocket : handshake, entrée en jeu, Conn
       protocol/                 # enveloppe {type,seq,data} + (dé)sérialisation
-      zone/                     # zones-acteurs : tick, mouvement, deltas (T3/T4), combat (T5)
-      domain/                   # entités métier : character (T3), item… (T6)
+      zone/                     # zones-acteurs : tick, mouvement (T3/T4), combat (T5), mobs, inventaire (T6)
+      rules/                    # règles chiffrées pures : combat, progression, objets/butin
+      domain/                   # entités métier : character (T3), item/inventaire (T6)
     migrations/                 # SQL versionné, embarqué dans le binaire
       0001_init.sql
 ```

@@ -523,3 +523,112 @@ func TestPlayerKillsMobAndIsRewarded(t *testing.T) {
 		t.Fatalf("le joueur aurait dû gagner de l'or en tuant le mob : %+v", cs)
 	}
 }
+
+// ── Inventaire (T6) ──────────────────────────────────────────────────────────
+
+func lootCatalogue() *domain.Catalogue {
+	return domain.NewCatalogue([]domain.ItemTemplate{
+		{ID: 1, Code: "dague_usee", Name: "Dague usée", Type: domain.ItemWeapon, Stats: domain.ItemStats{Atk: 3}},
+		{ID: 2, Code: "tunique_cuir", Name: "Tunique de cuir", Type: domain.ItemArmor, Stats: domain.ItemStats{Def: 3}},
+		{ID: 3, Code: "potion_soin", Name: "Potion de soin", Type: domain.ItemConsumable, Stackable: true, MaxStack: 10, Stats: domain.ItemStats{Heal: 40}},
+	})
+}
+
+// testDropCode injecte un objet au sol d'un code donné (exécuté dans l'acteur).
+func (m *Manager) testDropCode(zoneID int, code string, x, y int) string {
+	z := m.lookup(zoneID)
+	reply := make(chan string, 1)
+	z.cmds <- func() {
+		t, ok := z.cat.ByCode(code)
+		if !ok {
+			reply <- ""
+			return
+		}
+		g := &groundItem{id: newUUID(), templateID: t.ID, x: x, y: y}
+		z.ground[g.id] = g
+		reply <- g.id
+	}
+	return <-reply
+}
+
+// setHP force les PV d'un membre (exécuté dans l'acteur).
+func (m *Manager) setHP(zoneID int, charID string, hp int) {
+	z := m.lookup(zoneID)
+	done := make(chan struct{})
+	z.cmds <- func() {
+		if mem := z.members[charID]; mem != nil {
+			mem.char.HP = hp
+		}
+		close(done)
+	}
+	<-done
+}
+
+func (c *capSender) lastInventory() (InventoryData, bool) {
+	var inv InventoryData
+	ok := false
+	c.each(func(e capEntry) {
+		if d, is := e.data.(InventoryData); is {
+			inv, ok = d, true
+		}
+	})
+	return inv, ok
+}
+
+func TestPickupEquipUpdatesEffectiveStats(t *testing.T) {
+	m := NewManager(50, mobMetas("green", 0), nil)
+	m.SetCatalogue(lootCatalogue())
+	defer m.Close()
+	s := newCapSender()
+	h := hero("p") // à (X,Y) aléatoire ? non : hero place ZoneID=1, X/Y=0.
+	m.Enter(h, s)
+
+	// Un butin (dague +3 atk) tombe à portée du joueur (0,0).
+	itemID := m.testDropCode(1, "dague_usee", 0, 0)
+	if itemID == "" {
+		t.Fatal("échec de l'injection du butin")
+	}
+
+	// Ramasser : l'inventaire reçu contient la dague.
+	m.PickupItem(char("p", 1), itemID)
+	if !waitFor(time.Second, func() bool {
+		inv, ok := s.lastInventory()
+		return ok && len(inv.Items) == 1 && inv.Items[0].ID == itemID
+	}) {
+		t.Fatal("la dague ramassée devrait apparaître dans l'inventaire")
+	}
+
+	// Équiper : les statistiques effectives augmentent (bonus d'attaque).
+	m.EquipItem(char("p", 1), itemID)
+	if !waitFor(time.Second, func() bool {
+		cs, ok := s.lastCharState()
+		return ok && cs.StrBonus == 3
+	}) {
+		cs, _ := s.lastCharState()
+		t.Fatalf("l'arme équipée devrait donner +3 d'attaque : %+v", cs)
+	}
+}
+
+func TestPickupAndUseConsumableHeals(t *testing.T) {
+	m := NewManager(50, mobMetas("green", 0), nil)
+	m.SetCatalogue(lootCatalogue())
+	defer m.Close()
+	s := newCapSender()
+	m.Enter(hero("p"), s)
+
+	itemID := m.testDropCode(1, "potion_soin", 0, 0)
+	m.PickupItem(char("p", 1), itemID)
+	if !waitFor(time.Second, func() bool { _, ok := s.lastInventory(); return ok }) {
+		t.Fatal("la potion devrait être ramassée")
+	}
+	// Blesser le joueur puis boire la potion (+40 PV).
+	m.setHP(1, "p", 30)
+	m.UseItem(char("p", 1), itemID)
+	if !waitFor(time.Second, func() bool {
+		cs, ok := s.lastCharState()
+		return ok && cs.HP == 70
+	}) {
+		cs, _ := s.lastCharState()
+		t.Fatalf("la potion aurait dû soigner jusqu'à 70 PV : %+v", cs)
+	}
+}

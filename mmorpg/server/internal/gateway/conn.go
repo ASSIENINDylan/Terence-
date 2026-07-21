@@ -30,6 +30,7 @@ type Conn struct {
 	log       *slog.Logger
 
 	send      chan []byte
+	done      chan struct{}
 	closeOnce sync.Once
 }
 
@@ -39,15 +40,24 @@ func newConn(accountID int64, ws *websocket.Conn, log *slog.Logger) *Conn {
 		ws:        ws,
 		log:       log.With("account_id", accountID),
 		send:      make(chan []byte, sendBuffer),
+		done:      make(chan struct{}),
 	}
 }
 
 // Send met un message en file d'écriture. Non bloquant : si le client ne draine
 // pas assez vite (buffer plein), la connexion est fermée plutôt que de bloquer
-// le serveur (protection contre les consommateurs lents).
+// le serveur. La fermeture est signalée par le canal `done` (jamais par la
+// fermeture de `send`), afin qu'un envoi concurrent depuis l'acteur de zone ne
+// panique jamais sur un canal fermé.
 func (c *Conn) Send(msg []byte) {
 	select {
+	case <-c.done:
+		return // connexion fermée : on ignore silencieusement
+	default:
+	}
+	select {
 	case c.send <- msg:
+	case <-c.done: // fermée entre-temps
 	default:
 		c.log.Warn("file d'envoi saturée, fermeture de la connexion")
 		c.close()
@@ -64,9 +74,11 @@ func (c *Conn) SendEnvelope(msgType string, seq uint64, data any) {
 	c.Send(raw)
 }
 
-// close ferme le canal d'envoi une seule fois ; le writePump fermera la socket.
+// close signale la fermeture une seule fois (canal `done`) ; le writePump
+// fermera la socket. On ne ferme jamais `send` : d'autres goroutines (acteurs de
+// zone) peuvent encore tenter d'y écrire.
 func (c *Conn) close() {
-	c.closeOnce.Do(func() { close(c.send) })
+	c.closeOnce.Do(func() { close(c.done) })
 }
 
 // run lance les deux pumps et bloque jusqu'à la fermeture de la connexion.
@@ -129,14 +141,14 @@ func (c *Conn) writePump() {
 
 	for {
 		select {
-		case msg, ok := <-c.send:
+		case <-c.done:
+			// Fermeture demandée : on notifie proprement le pair puis on sort.
 			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if !ok {
-				// send fermé : on notifie proprement le pair puis on sort.
-				_ = c.ws.WriteMessage(websocket.CloseMessage,
-					websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-				return
-			}
+			_ = c.ws.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			return
+		case msg := <-c.send:
+			_ = c.ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
 				c.log.Warn("échec d'écriture, fermeture", "err", err)
 				return

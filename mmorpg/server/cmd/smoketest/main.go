@@ -43,6 +43,7 @@ func main() {
 	r.step("Écho d'un message", r.echo)
 	r.step("Rejoindre une zone verte par le portail + y voir 3 mobs", r.transitionToGreen)
 	r.step("Combat PvE : approcher un mob, l'IA joue, le vaincre, gagner de l'or", r.fightMob)
+	r.step("Butin : un mob tué lâche un objet, le ramasser et l'équiper", r.lootFlow)
 	r.step("Réapparition : le mob tué revient (la zone garde ses 3 mobs)", r.checkRespawn)
 	_ = r.ws.Close()
 
@@ -74,9 +75,24 @@ type runner struct {
 	portals []portalInfo
 	pos     map[string]xy
 	mobs    map[string]bool
+	ground  map[string]groundInfo // objets au sol : id → position + code
 }
 
 type xy struct{ X, Y int }
+
+type groundInfo struct {
+	code string
+	x, y int
+}
+
+type groundItemMsg struct {
+	ItemID     string `json:"item_id"`
+	TemplateID int    `json:"template_id"`
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+}
 
 type portalInfo struct {
 	LinkID int    `json:"link_id"`
@@ -97,7 +113,8 @@ type snapshotMsg struct {
 		Y           int    `json:"y"`
 		Mob         bool   `json:"mob"`
 	} `json:"entities"`
-	Portals []portalInfo `json:"portals"`
+	Ground  []groundItemMsg `json:"ground"`
+	Portals []portalInfo    `json:"portals"`
 }
 
 type deltaMsg struct {
@@ -112,7 +129,9 @@ type deltaMsg struct {
 		X           int    `json:"x"`
 		Y           int    `json:"y"`
 	} `json:"moved"`
-	Left []string `json:"left"`
+	Left        []string        `json:"left"`
+	ItemsGround []groundItemMsg `json:"items_ground"`
+	ItemsTaken  []string        `json:"items_taken"`
 }
 
 func (r *runner) step(name string, fn func() error) {
@@ -204,18 +223,18 @@ func (r *runner) enterGame() error {
 		return fmt.Errorf("1er message : attendu %q, obtenu %q", protocol.TypeAuthOK, env.Type)
 	}
 
-	// Ensuite : la fiche du personnage (char.update) peut précéder le
-	// zone.snapshot. On lit jusqu'au snapshot en ignorant les char.update.
+	// Ensuite : la fiche (char.update) et l'inventaire (char.inventory) peuvent
+	// précéder le zone.snapshot. On lit jusqu'au snapshot en les ignorant.
 	for {
 		env, err = r.readEnvelope()
 		if err != nil {
 			return err
 		}
-		if env.Type == protocol.TypeCharUpdate {
+		if env.Type == protocol.TypeCharUpdate || env.Type == protocol.TypeInventory {
 			continue
 		}
 		if env.Type != protocol.TypeZoneSnapshot {
-			return fmt.Errorf("attendu %q (ou char.update), obtenu %q", protocol.TypeZoneSnapshot, env.Type)
+			return fmt.Errorf("attendu %q (ou char.update/char.inventory), obtenu %q", protocol.TypeZoneSnapshot, env.Type)
 		}
 		break
 	}
@@ -240,15 +259,19 @@ func (r *runner) applySnapshot(snap snapshotMsg) {
 	r.portals = snap.Portals
 	r.pos = make(map[string]xy, len(snap.Entities))
 	r.mobs = make(map[string]bool)
+	r.ground = make(map[string]groundInfo)
 	for _, e := range snap.Entities {
 		r.pos[e.CharacterID] = xy{e.X, e.Y}
 		if e.Mob {
 			r.mobs[e.CharacterID] = true
 		}
 	}
+	for _, g := range snap.Ground {
+		r.ground[g.ItemID] = groundInfo{code: g.Code, x: g.X, y: g.Y}
+	}
 }
 
-// applyDelta met à jour les positions suivies à partir d'un zone.delta.
+// applyDelta met à jour les positions et objets au sol suivis depuis un delta.
 func (r *runner) applyDelta(d deltaMsg) {
 	for _, j := range d.Joined {
 		r.pos[j.CharacterID] = xy{j.X, j.Y}
@@ -262,6 +285,12 @@ func (r *runner) applyDelta(d deltaMsg) {
 	for _, id := range d.Left {
 		delete(r.pos, id)
 		delete(r.mobs, id)
+	}
+	for _, g := range d.ItemsGround {
+		r.ground[g.ItemID] = groundInfo{code: g.Code, x: g.X, y: g.Y}
+	}
+	for _, id := range d.ItemsTaken {
+		delete(r.ground, id)
 	}
 }
 
@@ -292,7 +321,7 @@ func (r *runner) awaitReply(wantType string, wantSeq uint64) error {
 			return err
 		}
 		switch env.Type {
-		case protocol.TypeZoneDelta, protocol.TypeZoneSnapshot, protocol.TypeCharUpdate:
+		case protocol.TypeZoneDelta, protocol.TypeZoneSnapshot, protocol.TypeCharUpdate, protocol.TypeInventory:
 			continue // trafic de fond : on ignore
 		}
 		if env.Type != wantType || env.Seq != wantSeq {
@@ -382,22 +411,18 @@ func (r *runner) fightMob() error {
 	return fmt.Errorf("le mob a fui trop de fois d'affilée sans être vaincu")
 }
 
-// checkRespawn vérifie qu'après la mort d'un mob, un nouveau mob réapparaît
-// (delta « joined » avec mob=true), preuve que la zone se repeuple.
+// checkRespawn vérifie qu'un mob tué réapparaît (delta « joined » avec mob=true) :
+// les combats précédents (fightMob/lootFlow) ont programmé des réapparitions à
+// venir. On lit normalement — sans time-out volontaire qui casserait la socket.
 func (r *runner) checkRespawn() error {
 	deadline := time.Now().Add(12 * time.Second)
 	for time.Now().Before(deadline) {
-		_ = r.ws.SetReadDeadline(deadline)
-		_, raw, err := r.ws.ReadMessage()
+		env, err := r.readEnvelope()
 		if err != nil {
 			return fmt.Errorf("aucune réapparition de mob observée : %w", err)
 		}
-		env, err := protocol.Decode(raw)
-		if err != nil {
-			return err
-		}
 		if env.Type != protocol.TypeZoneDelta {
-			continue // on ignore combat.* et char.update pendant la veille
+			continue // on ignore combat.*, char.update, char.inventory
 		}
 		var d deltaMsg
 		if err := env.DecodeData(&d); err != nil {
@@ -411,6 +436,147 @@ func (r *runner) checkRespawn() error {
 		}
 	}
 	return fmt.Errorf("aucun mob n'a réapparu dans le délai imparti")
+}
+
+// lootFlow vérifie la boucle d'objets : un mob tué lâche un objet au sol, le
+// joueur le ramasse (l'inventaire arrive), et — dès qu'un objet équipable tombe —
+// l'équipe, ce qui augmente ses statistiques effectives (char.update).
+func (r *runner) lootFlow() error {
+	pickedCodes := []string{}
+	for attempt := 0; attempt < 6; attempt++ {
+		// Tuer un mob : son butin tombe à ses pieds (= aux nôtres). On vise donc
+		// l'objet au sol À PORTÉE de nous — les drops antérieurs, plus loin, sont
+		// hors de portée et ignorés.
+		if _, err := r.oneCombat(); err != nil {
+			return fmt.Errorf("combat pour butin : %w", err)
+		}
+		itemID, gi, err := r.awaitGroundInRange(25, 4*time.Second)
+		if err != nil {
+			continue // pas de butin à portée repéré ; on retente
+		}
+		// Ramasser : on est à portée directe (le mob est mort ici).
+		_ = r.sendEnvelope(protocol.TypeMoveIntent, 0, map[string]int{"dx": 0, "dy": 0})
+		if err := r.sendEnvelope(protocol.TypeItemPickup, 0, map[string]string{"item_id": itemID}); err != nil {
+			return err
+		}
+		entry, err := r.awaitInventoryCode(gi.code, 4*time.Second)
+		if err != nil {
+			return fmt.Errorf("ramassage de %q : %w", gi.code, err)
+		}
+		pickedCodes = append(pickedCodes, entry.Code)
+
+		if entry.Type == "weapon" || entry.Type == "armor" {
+			if err := r.sendEnvelope(protocol.TypeItemEquip, 0, map[string]string{"item_id": entry.ID}); err != nil {
+				return err
+			}
+			if err := r.awaitEquipBonus(4 * time.Second); err != nil {
+				return fmt.Errorf("équipement de %q : %w", entry.Code, err)
+			}
+			fmt.Printf("      (butin ramassé %v ; objet équipé : %s → statistiques augmentées)\n", pickedCodes, entry.Code)
+			return nil
+		}
+		// Consommable ramassé : preuve d'inventaire ; on continue pour équiper.
+	}
+	return fmt.Errorf("aucun objet équipable ramassé après plusieurs mobs (obtenus : %v)", pickedCodes)
+}
+
+// awaitGroundInRange lit (en appliquant les deltas) jusqu'à repérer un objet au
+// sol à portée de ramassage du joueur — le butin fraîchement lâché tombe à ses
+// pieds. Comme un mob tué lâche toujours du butin, cela retourne avant le délai.
+func (r *runner) awaitGroundInRange(maxDist int, timeout time.Duration) (string, groundInfo, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		self := r.pos[r.selfID]
+		for id, gi := range r.ground {
+			if dist2(self, xy{gi.x, gi.y}) <= maxDist*maxDist {
+				return id, gi, nil
+			}
+		}
+		env, err := r.readEnvelope()
+		if err != nil {
+			return "", groundInfo{}, err
+		}
+		if env.Type == protocol.TypeZoneDelta {
+			var d deltaMsg
+			if err := env.DecodeData(&d); err == nil {
+				r.applyDelta(d)
+			}
+		}
+	}
+	return "", groundInfo{}, fmt.Errorf("aucun objet au sol à portée observé")
+}
+
+func (r *runner) nearestGround() (string, groundInfo, bool) {
+	self := r.pos[r.selfID]
+	bestID, bestG, bestD, found := "", groundInfo{}, 1<<30, false
+	for id, g := range r.ground {
+		if d := dist2(self, xy{g.x, g.y}); d < bestD {
+			bestID, bestG, bestD, found = id, g, d, true
+		}
+	}
+	return bestID, bestG, found
+}
+
+type invItem struct {
+	ID       string `json:"id"`
+	Code     string `json:"code"`
+	Type     string `json:"type"`
+	Quantity int    `json:"quantity"`
+	Equipped bool   `json:"equipped"`
+}
+
+// awaitInventoryCode lit jusqu'à un char.inventory contenant un objet du code
+// donné (les objets empilables fusionnent sur un exemplaire existant, dont
+// l'identifiant diffère de celui de l'objet au sol — d'où le repère par code).
+func (r *runner) awaitInventoryCode(code string, timeout time.Duration) (invItem, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		env, err := r.readEnvelope()
+		if err != nil {
+			return invItem{}, err
+		}
+		if env.Type != protocol.TypeInventory {
+			continue
+		}
+		var inv struct {
+			Items []invItem `json:"items"`
+		}
+		if err := env.DecodeData(&inv); err != nil {
+			return invItem{}, err
+		}
+		for _, it := range inv.Items {
+			if it.Code == code {
+				return it, nil
+			}
+		}
+	}
+	return invItem{}, fmt.Errorf("objet absent de l'inventaire reçu")
+}
+
+// awaitEquipBonus lit jusqu'à un char.update portant un bonus d'équipement > 0.
+func (r *runner) awaitEquipBonus(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		env, err := r.readEnvelope()
+		if err != nil {
+			return err
+		}
+		if env.Type != protocol.TypeCharUpdate {
+			continue
+		}
+		var cs struct {
+			StrBonus float64 `json:"str_bonus"`
+			DefBonus float64 `json:"def_bonus"`
+			AgiBonus float64 `json:"agi_bonus"`
+		}
+		if err := env.DecodeData(&cs); err != nil {
+			return err
+		}
+		if cs.StrBonus > 0 || cs.DefBonus > 0 || cs.AgiBonus > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("aucun bonus d'équipement reflété dans char.update")
 }
 
 type combatResult struct {

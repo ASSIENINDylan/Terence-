@@ -18,6 +18,7 @@ import (
 	"github.com/assienindylan/terence-/mmorpg/server/internal/auth"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/cache"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/config"
+	"github.com/assienindylan/terence-/mmorpg/server/internal/domain"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/gateway"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/httpapi"
 	"github.com/assienindylan/terence-/mmorpg/server/internal/store"
@@ -88,8 +89,16 @@ func run(logger *slog.Logger) error {
 	}
 	metas, zoneLinks := buildWorld(zones, links)
 
+	// Catalogue d'objets (§8) : chargé une fois, partagé par toutes les zones
+	// (butin des mobs, équipement).
+	templates, err := db.ListItemTemplates(startCtx)
+	if err != nil {
+		return err
+	}
+
 	// Monde en mémoire : zones-acteurs avec boucle de tick à TICK_HZ.
 	world := zone.NewManager(cfg.TickHz, metas, zoneLinks)
+	world.SetCatalogue(domain.NewCatalogue(templates))
 	defer world.Close()
 
 	// Gateway temps réel (T2/T3) : handshake authentifié, puis chargement du

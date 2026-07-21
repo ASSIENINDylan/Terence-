@@ -66,18 +66,21 @@ var (
 	ErrNoPotion        = errors.New("rules: aucune potion ou déjà à pleine santé")
 	ErrUnknownTech     = errors.New("rules: technique inconnue")
 	ErrAlreadyLearned  = errors.New("rules: technique déjà apprise")
+	ErrNotConsumable   = errors.New("rules: objet non consommable")
+	ErrNoHeal          = errors.New("rules: déjà à pleine santé")
 )
 
 // ── Formules dérivées (attaque / défense / agilité) ─────────────────────────
 
-// Power : puissance d'attaque.
-func Power(c domain.Character) float64 { return 0.5*c.Str + 0.3*c.Def + 0.2*c.Agi }
+// Power : puissance d'attaque (sur les statistiques EFFECTIVES = base +
+// équipement).
+func Power(c domain.Character) float64 { return 0.5*c.EffStr() + 0.3*c.EffDef() + 0.2*c.EffAgi() }
 
-// Mitig : réduction (défense).
-func Mitig(c domain.Character) float64 { return 0.5*c.Def + 0.3*c.Agi + 0.2*c.Str }
+// Mitig : réduction (défense), sur les statistiques effectives.
+func Mitig(c domain.Character) float64 { return 0.5*c.EffDef() + 0.3*c.EffAgi() + 0.2*c.EffStr() }
 
-// FleeVal : valeur de fuite.
-func FleeVal(c domain.Character) float64 { return 0.5*c.Agi + 0.3*c.Str + 0.2*c.Def }
+// FleeVal : valeur de fuite, sur les statistiques effectives.
+func FleeVal(c domain.Character) float64 { return 0.5*c.EffAgi() + 0.3*c.EffStr() + 0.2*c.EffDef() }
 
 // Damage : dégâts d'une attaque normale.
 func Damage(attacker, defender domain.Character) int {
@@ -147,6 +150,73 @@ func MobSpecFor(tier string) (MobSpec, bool) {
 	return s, ok
 }
 
+// ── Objets & inventaire (T6) ─────────────────────────────────────────────────
+
+// Rendement d'équipement : les bonus d'objets s'appliquent tels quels, mais on
+// centralise ici la règle pour un futur ré-équilibrage (ex. malus, sets…).
+
+// EquipBonus somme les bonus des objets ÉQUIPÉS (armes/armures) d'un inventaire,
+// via le catalogue. Retourne les bonus (attaque, défense, agilité).
+func EquipBonus(cat *domain.Catalogue, inv []domain.InventoryItem) (str, def, agi float64) {
+	for _, it := range inv {
+		if !it.Equipped {
+			continue
+		}
+		t, ok := cat.ByID(it.TemplateID)
+		if !ok || (t.Type != domain.ItemWeapon && t.Type != domain.ItemArmor) {
+			continue
+		}
+		str += t.Stats.Atk
+		def += t.Stats.Def
+		agi += t.Stats.Agi
+	}
+	return str, def, agi
+}
+
+// IsEquipable indique si un type d'objet s'équipe (arme ou armure).
+func IsEquipable(t domain.ItemType) bool { return t == domain.ItemWeapon || t == domain.ItemArmor }
+
+// EquipSlot retourne l'« emplacement » logique d'un type équipable : une seule
+// arme et une seule armure à la fois. Chaîne vide si non équipable.
+func EquipSlot(t domain.ItemType) string {
+	switch t {
+	case domain.ItemWeapon:
+		return "weapon"
+	case domain.ItemArmor:
+		return "armor"
+	}
+	return ""
+}
+
+// ConsumeHeal applique le soin d'un consommable à un personnage. Retourne les PV
+// rendus, ou une erreur si l'objet n'est pas un consommable soignant, ou si le
+// personnage est déjà à pleine santé.
+func ConsumeHeal(c *domain.Character, t domain.ItemTemplate) (int, error) {
+	if t.Type != domain.ItemConsumable || t.Stats.Heal <= 0 {
+		return 0, ErrNotConsumable
+	}
+	if c.HP >= c.MaxHP {
+		return 0, ErrNoHeal
+	}
+	heal := t.Stats.Heal
+	if heal > c.MaxHP-c.HP {
+		heal = c.MaxHP - c.HP
+	}
+	c.HP += heal
+	return heal, nil
+}
+
+// lootTables : codes d'objets que peut lâcher un mob, par palier de zone.
+var lootTables = map[string][]string{
+	"green":  {"dague_usee", "tunique_cuir", "potion_soin"},
+	"orange": {"epee_courte", "cotte_mailles", "potion_soin"},
+	"red":    {"lame_ardente", "armure_plaques", "elixir_majeur"},
+}
+
+// LootCodesFor retourne les codes d'objets pouvant tomber dans un palier donné
+// (nil si le palier ne lâche rien).
+func LootCodesFor(tier string) []string { return lootTables[tier] }
+
 // TechniquesFor retourne les techniques disponibles pour un élément.
 func TechniquesFor(element string) []Technique { return techniques[element] }
 
@@ -163,8 +233,8 @@ func FindTech(element, id string) (Technique, bool) {
 // TechDamage : dégâts d'une technique — dominés par l'affinité, mais les autres
 // attributs y contribuent aussi.
 func TechDamage(attacker domain.Character, t Technique, defender domain.Character) int {
-	spec := statValue(attacker, attacker.SpecStat)
-	others := (attacker.Str + attacker.Def + attacker.Agi) - spec
+	spec := effStatValue(attacker, attacker.SpecStat)
+	others := (attacker.EffStr() + attacker.EffDef() + attacker.EffAgi()) - spec
 	base := t.Mult * (TechSpecW*spec + TechOtherW*others)
 	return floorAtLeast(base-TechMitFactor*Mitig(defender), DmgFloor)
 }
@@ -303,6 +373,19 @@ func statValue(c domain.Character, key string) float64 {
 		return c.Def
 	case "agi":
 		return c.Agi
+	}
+	return 0
+}
+
+// effStatValue lit une statistique EFFECTIVE (base + équipement) par clé.
+func effStatValue(c domain.Character, key string) float64 {
+	switch key {
+	case "str":
+		return c.EffStr()
+	case "def":
+		return c.EffDef()
+	case "agi":
+		return c.EffAgi()
 	}
 	return 0
 }

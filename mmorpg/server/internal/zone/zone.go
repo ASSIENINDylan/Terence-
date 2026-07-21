@@ -35,6 +35,7 @@ const (
 	mobRespawnSec    = 6  // délai avant réapparition d'un mob mort
 	mobWanderMinSec  = 2  // errance : nouvelle direction toutes les 2–5 s
 	mobWanderMaxSec  = 5
+	pickupRadius     = 30 // distance max pour ramasser un objet au sol
 )
 
 // Sender pousse un message à un joueur.
@@ -116,14 +117,15 @@ func entityStateOfMember(m *member) EntityState {
 // SnapshotData est l'état complet d'une zone, envoyé à l'entrée (T3) et après
 // chaque transition.
 type SnapshotData struct {
-	ZoneID   int           `json:"zone_id"`
-	ZoneName string        `json:"zone_name"`
-	Tier     string        `json:"tier"`
-	PvP      bool          `json:"pvp"`
-	Self     string        `json:"self"`
-	Entities []EntityState `json:"entities"`
-	Portals  []Portal      `json:"portals,omitempty"`
-	Tick     uint64        `json:"tick"`
+	ZoneID   int               `json:"zone_id"`
+	ZoneName string            `json:"zone_name"`
+	Tier     string            `json:"tier"`
+	PvP      bool              `json:"pvp"`
+	Self     string            `json:"self"`
+	Entities []EntityState     `json:"entities"`
+	Ground   []GroundItemState `json:"ground,omitempty"`
+	Portals  []Portal          `json:"portals,omitempty"`
+	Tick     uint64            `json:"tick"`
 }
 
 // MovedEntity décrit la nouvelle position d'une entité qui a bougé.
@@ -133,12 +135,32 @@ type MovedEntity struct {
 	Y           int    `json:"y"`
 }
 
+// GroundItemState est un objet au sol, ramassable, exposé au client (§8).
+type GroundItemState struct {
+	ItemID     string `json:"item_id"`
+	TemplateID int    `json:"template_id"`
+	Code       string `json:"code"`
+	Name       string `json:"name"`
+	X          int    `json:"x"`
+	Y          int    `json:"y"`
+}
+
 // DeltaData diffuse les changements d'une zone sur un tick (T4).
 type DeltaData struct {
-	Tick   uint64        `json:"tick"`
-	Joined []EntityState `json:"joined,omitempty"`
-	Moved  []MovedEntity `json:"moved,omitempty"`
-	Left   []string      `json:"left,omitempty"`
+	Tick        uint64            `json:"tick"`
+	Joined      []EntityState     `json:"joined,omitempty"`
+	Moved       []MovedEntity     `json:"moved,omitempty"`
+	Left        []string          `json:"left,omitempty"`
+	ItemsGround []GroundItemState `json:"items_ground,omitempty"` // objets apparus au sol
+	ItemsTaken  []string          `json:"items_taken,omitempty"`  // objets ramassés/disparus
+}
+
+// groundItem est un objet lâché au sol dans une zone (butin de mob). Son
+// identifiant devient l'identifiant d'exemplaire une fois ramassé.
+type groundItem struct {
+	id         string
+	templateID int
+	x, y       int
 }
 
 // member est l'état vivant d'un personnage présent dans une zone.
@@ -172,6 +194,7 @@ type Zone struct {
 	meta ZoneMeta
 	hz   int
 	step int
+	cat  *domain.Catalogue // catalogue d'objets (butin, équipement)
 
 	cmds chan func()
 	quit chan struct{}
@@ -184,6 +207,11 @@ type Zone struct {
 	left   []string
 	dirty  map[string]bool
 
+	// Objets au sol et leurs deltas (apparitions / ramassages) accumulés au tick.
+	ground      map[string]*groundItem
+	itemsGround []GroundItemState
+	itemsTaken  []string
+
 	mobN        int
 	mobRespawns []uint64 // ticks auxquels réapparaît un mob
 
@@ -195,18 +223,19 @@ type Zone struct {
 	rng              *rand.Rand
 }
 
-func newZone(meta ZoneMeta, hz int) *Zone {
+func newZone(meta ZoneMeta, hz int, cat *domain.Catalogue) *Zone {
 	step := moveSpeedPerSec / hz
 	if step < 1 {
 		step = 1
 	}
 	z := &Zone{
-		meta: meta, hz: hz, step: step,
+		meta: meta, hz: hz, step: step, cat: cat,
 		cmds:    make(chan func(), mailboxSize),
 		quit:    make(chan struct{}),
 		members: make(map[string]*member),
 		combats: make(map[string]*combat),
 		dirty:   make(map[string]bool),
+		ground:  make(map[string]*groundItem),
 
 		turnTimeoutTicks: uint64(turnTimeoutSec * hz),
 		cooldownTicks:    uint64(engageCooldown * hz),
@@ -326,12 +355,18 @@ func (z *Zone) doTick() {
 		}
 	}
 	left := z.left
+	itemsGround, itemsTaken := z.itemsGround, z.itemsTaken
 	z.joined, z.left = nil, nil
+	z.itemsGround, z.itemsTaken = nil, nil
 
-	if len(joined) == 0 && len(moved) == 0 && len(left) == 0 {
+	if len(joined) == 0 && len(moved) == 0 && len(left) == 0 &&
+		len(itemsGround) == 0 && len(itemsTaken) == 0 {
 		return
 	}
-	delta := DeltaData{Tick: z.tick, Joined: joined, Moved: moved, Left: left}
+	delta := DeltaData{
+		Tick: z.tick, Joined: joined, Moved: moved, Left: left,
+		ItemsGround: itemsGround, ItemsTaken: itemsTaken,
+	}
 	for _, m := range z.members {
 		m.client.SendEnvelope(protocol.TypeZoneDelta, 0, delta)
 	}
@@ -344,10 +379,23 @@ func (z *Zone) snapshotFor(charID string) SnapshotData {
 	for _, m := range z.members {
 		entities = append(entities, entityStateOfMember(m))
 	}
+	ground := make([]GroundItemState, 0, len(z.ground))
+	for _, g := range z.ground {
+		ground = append(ground, z.groundStateOf(g))
+	}
 	return SnapshotData{
 		ZoneID: z.meta.ID, ZoneName: z.meta.Name, Tier: z.meta.Tier, PvP: z.meta.PvP,
-		Self: charID, Entities: entities, Portals: z.meta.Portals, Tick: z.tick,
+		Self: charID, Entities: entities, Ground: ground, Portals: z.meta.Portals, Tick: z.tick,
 	}
+}
+
+// groundStateOf construit la représentation réseau d'un objet au sol.
+func (z *Zone) groundStateOf(g *groundItem) GroundItemState {
+	st := GroundItemState{ItemID: g.id, TemplateID: g.templateID, X: g.x, Y: g.y}
+	if t, ok := z.cat.ByID(g.templateID); ok {
+		st.Code, st.Name = t.Code, t.Name
+	}
+	return st
 }
 
 func (z *Zone) enter(char domain.Character, client Client) SnapshotData {
@@ -359,9 +407,11 @@ func (z *Zone) enter(char domain.Character, client Client) SnapshotData {
 			m.char.HP = m.char.MaxHP
 			m.char.Energy = m.char.MaxEnergy
 		}
+		z.recomputeEquip(m) // bonus des objets équipés (chargés depuis la base)
 		z.members[char.ID] = m
 		z.joined = append(z.joined, char.ID)
 		z.sendCharUpdate(m)
+		z.sendInventory(m)
 		reply <- z.snapshotFor(char.ID)
 	}
 	return <-reply
@@ -466,8 +516,17 @@ type Manager struct {
 	hz    int
 	metas map[int]ZoneMeta
 	links map[int]Link
+	cat   *domain.Catalogue
 	mu    sync.Mutex
 	zones map[int]*Zone
+}
+
+// SetCatalogue fixe le catalogue d'objets partagé par toutes les zones. À
+// appeler au démarrage, avant toute création de zone.
+func (m *Manager) SetCatalogue(cat *domain.Catalogue) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cat = cat
 }
 
 // NewManager crée le gestionnaire à partir des métadonnées de zones et des liens
@@ -494,7 +553,7 @@ func (m *Manager) zoneFor(id int) *Zone {
 		if !has {
 			meta = ZoneMeta{ID: id, Name: "Zone inconnue", Tier: "green"}
 		}
-		z = newZone(meta, m.hz)
+		z = newZone(meta, m.hz, m.cat)
 		m.zones[id] = z
 	}
 	return z

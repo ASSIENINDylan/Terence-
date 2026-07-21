@@ -27,6 +27,15 @@ type Character struct {
 	Def float64 // défense
 	Agi float64 // agilité (initiative + fuite)
 
+	// Bonus d'équipement (armes/armures équipées), recalculés à chaque
+	// changement. Ne sont pas persistés : ils dérivent de l'inventaire.
+	StrBonus float64
+	DefBonus float64
+	AgiBonus float64
+
+	// Inventaire : exemplaires possédés (objets ramassés, équipés, consommés).
+	Inventory []InventoryItem
+
 	// Ressources et progression.
 	Energy    int
 	MaxEnergy int

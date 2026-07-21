@@ -27,12 +27,14 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) (accountID int64, err error)
 }
 
-// CharacterStore charge, crée et persiste le personnage d'un compte.
-// store.Store satisfait cette interface.
+// CharacterStore charge, crée et persiste le personnage d'un compte, ainsi que
+// son inventaire. store.Store satisfait cette interface.
 type CharacterStore interface {
 	GetOrCreateForAccount(ctx context.Context, accountID int64, element string) (domain.Character, error)
 	SaveState(ctx context.Context, char domain.Character) error
 	TouchLastPlayed(ctx context.Context, characterID string) error
+	LoadInventory(ctx context.Context, characterID string) ([]domain.InventoryItem, error)
+	SaveInventory(ctx context.Context, characterID string, items []domain.InventoryItem) error
 }
 
 // World place les personnages dans leur zone, en produit les snapshots, applique
@@ -49,6 +51,9 @@ type World interface {
 	LearnTech(char domain.Character, id string)
 	BuyPotion(char domain.Character)
 	UsePotion(char domain.Character)
+	PickupItem(char domain.Character, itemID string)
+	EquipItem(char domain.Character, itemID string)
+	UseItem(char domain.Character, itemID string)
 }
 
 // Gateway gère l'upgrade HTTP→WebSocket et le cycle de vie des connexions.
@@ -156,6 +161,11 @@ type transitionPayload struct {
 	LinkID int `json:"link_id"`
 }
 
+// itemActionPayload : action d'inventaire (ramasser/équiper/utiliser).
+type itemActionPayload struct {
+	ItemID string `json:"item_id"`
+}
+
 // loadCharacter charge (ou crée) le personnage du compte. Retourne false si le
 // chargement échoue.
 func (g *Gateway) loadCharacter(reqCtx context.Context, conn *Conn, accountID int64, element string) (domain.Character, bool) {
@@ -170,6 +180,12 @@ func (g *Gateway) loadCharacter(reqCtx context.Context, conn *Conn, accountID in
 			Message: "impossible de charger le personnage",
 		})
 		return domain.Character{}, false
+	}
+	// Inventaire persistant (§8) : un échec n'empêche pas d'entrer en jeu.
+	if inv, err := g.characters.LoadInventory(ctx, char.ID); err != nil {
+		g.log.Warn("chargement de l'inventaire échoué", "character_id", char.ID, "err", err)
+	} else {
+		char.Inventory = inv
 	}
 	_ = g.characters.TouchLastPlayed(ctx, char.ID)
 	return char, true

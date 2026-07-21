@@ -39,6 +39,12 @@ func (fakeCharacters) GetOrCreateForAccount(_ context.Context, accountID int64, 
 }
 func (fakeCharacters) SaveState(context.Context, domain.Character) error { return nil }
 func (fakeCharacters) TouchLastPlayed(context.Context, string) error     { return nil }
+func (fakeCharacters) LoadInventory(context.Context, string) ([]domain.InventoryItem, error) {
+	return nil, nil
+}
+func (fakeCharacters) SaveInventory(context.Context, string, []domain.InventoryItem) error {
+	return nil
+}
 
 func newTestServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()

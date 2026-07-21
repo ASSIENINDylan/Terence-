@@ -18,6 +18,11 @@ type CharState struct {
 	Def float64 `json:"def"`
 	Agi float64 `json:"agi"`
 
+	// Bonus d'équipement (armes/armures) : le client affiche « base (+bonus) ».
+	StrBonus float64 `json:"str_bonus"`
+	DefBonus float64 `json:"def_bonus"`
+	AgiBonus float64 `json:"agi_bonus"`
+
 	HP        int `json:"hp"`
 	MaxHP     int `json:"max_hp"`
 	Energy    int `json:"energy"`
@@ -45,6 +50,7 @@ func CharStateOf(c domain.Character) CharState {
 	return CharState{
 		Level: c.Level, XP: c.XP, XPNeeded: rules.XPNeeded(c.Level),
 		Str: c.Str, Def: c.Def, Agi: c.Agi,
+		StrBonus: c.StrBonus, DefBonus: c.DefBonus, AgiBonus: c.AgiBonus,
 		HP: c.HP, MaxHP: c.MaxHP, Energy: c.Energy, MaxEnergy: c.MaxEnergy,
 		Gold: c.Gold, Potions: c.Potions,
 		AttrPoints: c.AttrPoints, PerfectPoints: c.PerfectPoints, TechPoints: c.TechPoints,

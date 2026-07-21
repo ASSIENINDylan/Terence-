@@ -104,13 +104,16 @@ func (s *session) doTransition(linkID int) {
 	s.gw.log.Info("transition de zone", "character_id", newChar.ID, "zone_id", newChar.ZoneID)
 }
 
-// persist sauvegarde l'état du personnage (position, zone, PV, XP) dans un
-// contexte détaché de la requête.
+// persist sauvegarde l'état du personnage (position, zone, PV, XP) et son
+// inventaire dans un contexte détaché de la requête.
 func (s *session) persist(char domain.Character) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.gw.characters.SaveState(ctx, char); err != nil {
 		s.gw.log.Warn("sauvegarde de l'état échouée", "character_id", char.ID, "err", err)
+	}
+	if err := s.gw.characters.SaveInventory(ctx, char.ID, char.Inventory); err != nil {
+		s.gw.log.Warn("sauvegarde de l'inventaire échouée", "character_id", char.ID, "err", err)
 	}
 }
 
@@ -158,6 +161,27 @@ func (s *session) handle(env protocol.Envelope) {
 
 	case protocol.TypeUsePotion:
 		s.gw.world.UsePotion(s.getChar())
+
+	case protocol.TypeItemPickup:
+		var p itemActionPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.PickupItem(s.getChar(), p.ItemID)
+
+	case protocol.TypeItemEquip:
+		var p itemActionPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.EquipItem(s.getChar(), p.ItemID)
+
+	case protocol.TypeItemUse:
+		var p itemActionPayload
+		if err := env.DecodeData(&p); err != nil {
+			return
+		}
+		s.gw.world.UseItem(s.getChar(), p.ItemID)
 
 	case protocol.TypeZoneTransition:
 		var t transitionPayload

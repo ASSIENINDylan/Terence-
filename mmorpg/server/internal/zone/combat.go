@@ -354,6 +354,7 @@ func (z *Zone) handleDeath(c *combat, winnerID, loserID string) {
 		delete(z.members, loserID)
 		z.left = append(z.left, loserID)
 		if loser.isMob {
+			z.dropLoot(loser.char.X, loser.char.Y) // butin au sol
 			z.mobRespawns = append(z.mobRespawns, z.tick+z.mobRespawnTicks)
 		} else if relocate != nil {
 			loser.client.Relocate(*relocate)

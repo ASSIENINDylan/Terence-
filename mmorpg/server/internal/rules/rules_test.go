@@ -140,3 +140,68 @@ func TestPerfectKillThreshold(t *testing.T) {
 		t.Fatal("seuils de kills parfaits incorrects")
 	}
 }
+
+// ── Objets & inventaire (T6) ─────────────────────────────────────────────────
+
+func itemCatalogue() *domain.Catalogue {
+	return domain.NewCatalogue([]domain.ItemTemplate{
+		{ID: 1, Code: "epee", Name: "Épée", Type: domain.ItemWeapon, Stats: domain.ItemStats{Atk: 6}},
+		{ID: 2, Code: "cotte", Name: "Cotte", Type: domain.ItemArmor, Stats: domain.ItemStats{Def: 4}},
+		{ID: 3, Code: "potion", Name: "Potion", Type: domain.ItemConsumable, Stackable: true, MaxStack: 10, Stats: domain.ItemStats{Heal: 40}},
+	})
+}
+
+func TestEquipBonusAppliesToEffectiveStatsAndDamage(t *testing.T) {
+	cat := itemCatalogue()
+	c := feu() // 15/10/10, str spec
+	c.Inventory = []domain.InventoryItem{
+		{ID: "a", TemplateID: 1, Quantity: 1, Equipped: true}, // arme +6 atk
+		{ID: "b", TemplateID: 2, Quantity: 1, Equipped: true}, // armure +4 def
+		{ID: "c", TemplateID: 3, Quantity: 2},                 // potion, non équipée
+	}
+	str, def, agi := EquipBonus(cat, c.Inventory)
+	if str != 6 || def != 4 || agi != 0 {
+		t.Fatalf("bonus d'équipement attendus (6,4,0), obtenus (%v,%v,%v)", str, def, agi)
+	}
+	c.StrBonus, c.DefBonus, c.AgiBonus = str, def, agi
+	if c.EffStr() != 21 || c.EffDef() != 14 || c.EffAgi() != 10 {
+		t.Fatalf("stats effectives incorrectes : %v/%v/%v", c.EffStr(), c.EffDef(), c.EffAgi())
+	}
+	// Les dégâts effectifs dépassent les dégâts « nus » (bonus d'attaque pris en compte).
+	def2 := domain.Character{Str: 10, Def: 10, Agi: 10}
+	bare := feu()
+	if Damage(c, def2) <= Damage(bare, def2) {
+		t.Fatalf("l'équipement devrait augmenter les dégâts : équipé=%d nu=%d", Damage(c, def2), Damage(bare, def2))
+	}
+}
+
+func TestConsumeHeal(t *testing.T) {
+	cat := itemCatalogue()
+	potion, _ := cat.ByID(3)
+	c := feu()
+	c.HP, c.MaxHP = 30, 100
+	healed, err := ConsumeHeal(&c, potion)
+	if err != nil || healed != 40 || c.HP != 70 {
+		t.Fatalf("soin attendu +40 → 70 PV, obtenu healed=%d hp=%d err=%v", healed, c.HP, err)
+	}
+	// À pleine santé : refus.
+	c.HP = c.MaxHP
+	if _, err := ConsumeHeal(&c, potion); err != ErrNoHeal {
+		t.Fatalf("attendu ErrNoHeal à pleine santé, obtenu %v", err)
+	}
+	// Un objet non consommable ne soigne pas.
+	sword, _ := cat.ByID(1)
+	c.HP = 10
+	if _, err := ConsumeHeal(&c, sword); err != ErrNotConsumable {
+		t.Fatalf("attendu ErrNotConsumable pour une arme, obtenu %v", err)
+	}
+}
+
+func TestLootCodesFor(t *testing.T) {
+	if len(LootCodesFor("green")) == 0 || len(LootCodesFor("red")) == 0 {
+		t.Fatal("les paliers vert/rouge devraient lâcher du butin")
+	}
+	if LootCodesFor("village") != nil {
+		t.Fatal("le village ne devrait rien lâcher")
+	}
+}
