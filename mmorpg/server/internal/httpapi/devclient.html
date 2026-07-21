@@ -614,10 +614,10 @@
 
   // Thème par palier : couleur du sol, ciel, brouillard, décor.
   const THEME = {
-    village: { ground: 0x2c4a28, sky: 0x101d12, deco: "tree" },
+    village: { ground: 0x6e5334, sky: 0x2a3620, deco: "village" }, // sol de terre
     green:   { ground: 0x1f3d24, sky: 0x0b150e, deco: "tree" },
     orange:  { ground: 0x3f2d14, sky: 0x160e07, deco: "rock" },
-    red:     { ground: 0x381318, sky: 0x120609, deco: "spike" },
+    red:      { ground: 0x381318, sky: 0x120609, deco: "spike" },
   };
   const decoGroup = new THREE.Group(); scene.add(decoGroup);
   let lastTier = null;
@@ -625,35 +625,158 @@
     const t = THEME[S.tier] || { ground: 0x1c2c40, sky: 0x0b1120, deco: "tree" };
     groundMat.color.setHex(t.ground);
     scene.background = new THREE.Color(t.sky);
-    scene.fog = new THREE.Fog(t.sky, 280, 1200);
-    rebuildDeco(t.deco);
+    scene.fog = new THREE.Fog(t.sky, t.deco === "village" ? 420 : 280, 1400);
+    if (t.deco === "village") buildVillage(); else rebuildDeco(t.deco);
   }
 
-  // Décor : arbres / rochers / pics selon le palier, placés de façon
-  // déterministe (même décor pour tous les joueurs d'une zone).
+  // ── Matériau / RNG déterministe partagés ──
+  const std = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r === undefined ? 0.85 : r });
+  function rngFrom(base) { let s = base || 1; return () => { s = (s * 16807) % 2147483647; return s / 2147483647; }; }
+
+  function treeMesh(rand) {
+    const g = new THREE.Group();
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.4, 9, 8), std(0x5a3d24)); trunk.position.y = 4.5; g.add(trunk);
+    const fol = new THREE.Mesh(new THREE.ConeGeometry(9 + rand() * 4, 20 + rand() * 8, 9), std(rand() > .5 ? 0x2e6b34 : 0x3a7d3c)); fol.position.y = 18; g.add(fol);
+    return g;
+  }
+  function flowerMesh(col) {
+    const g = new THREE.Group();
+    const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 3, 5), std(0x3a7d3c)); stem.position.y = 1.5; g.add(stem);
+    const bloom = new THREE.Mesh(new THREE.SphereGeometry(0.95, 8, 6), std(col, 0.6)); bloom.position.y = 3.1; g.add(bloom);
+    return g;
+  }
+  function grassPatch(x, z, r, col) {
+    const m = new THREE.Mesh(new THREE.CircleGeometry(r, 12), std(col)); m.rotation.x = -Math.PI / 2; m.position.set(x, 0.35, z); return m;
+  }
+
+  // Décor sauvage (zones vert/orange/rouge).
   function rebuildDeco(kind) {
-    decoGroup.clear();
-    let seed = 1234 + (S.zoneId || 0) * 77;
-    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    decoGroup.clear(); grid.visible = true;
+    const rand = rngFrom(1234 + (S.zoneId || 0) * 77);
     for (let i = 0; i < 26; i++) {
       const x = (rand() * 2 - 1) * 440, z = (rand() * 2 - 1) * 440;
-      if (Math.hypot(x, z) < 90) continue; // zone de spawn dégagée
-      const g = new THREE.Group();
-      if (kind === "tree") {
-        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.4, 9, 8), new THREE.MeshLambertMaterial({ color: 0x5a3d24 }));
-        trunk.position.y = 4.5; g.add(trunk);
-        const fol = new THREE.Mesh(new THREE.ConeGeometry(9 + rand() * 4, 20 + rand() * 8, 9), new THREE.MeshLambertMaterial({ color: rand() > .5 ? 0x2e6b34 : 0x3a7d3c }));
-        fol.position.y = 18; g.add(fol);
-      } else if (kind === "rock") {
-        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(5 + rand() * 5), new THREE.MeshLambertMaterial({ color: 0x6b5a44 }));
-        rock.position.y = 3.5; rock.rotation.set(rand() * 3, rand() * 3, rand() * 3); g.add(rock);
-      } else {
-        const spike = new THREE.Mesh(new THREE.ConeGeometry(3.5 + rand() * 2.5, 18 + rand() * 10, 6), new THREE.MeshLambertMaterial({ color: 0x4a1f26 }));
-        spike.position.y = 9; spike.rotation.y = rand() * 3; g.add(spike);
-      }
-      g.position.set(x, 0, -z);
-      decoGroup.add(g);
+      if (Math.hypot(x, z) < 90) continue;
+      let g;
+      if (kind === "tree") { g = treeMesh(rand); }
+      else if (kind === "rock") { g = new THREE.Group(); const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(5 + rand() * 5), std(0x6b5a44)); rock.position.y = 3.5; rock.rotation.set(rand() * 3, rand() * 3, rand() * 3); g.add(rock); }
+      else { g = new THREE.Group(); const spike = new THREE.Mesh(new THREE.ConeGeometry(3.5 + rand() * 2.5, 18 + rand() * 10, 6), std(0x4a1f26)); spike.position.y = 9; spike.rotation.y = rand() * 3; g.add(spike); }
+      g.position.set(x, 0, -z); decoGroup.add(g);
     }
+  }
+
+  // ══════════ Aménagement du village ══════════
+  const pathMat = std(0xa9885a, 1);       // terre battue du chemin
+  const plazaMat = std(0x9c7b4a, 1);
+
+  // Chemin plat du centre (0,0) vers un bâtiment (bx, by) — un ruban orienté.
+  function pathTo(bx, by, width) {
+    const len = Math.hypot(bx, by), grp = new THREE.Group();
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(len, width), pathMat);
+    plane.rotation.x = -Math.PI / 2; plane.position.x = len / 2;
+    grp.add(plane); grp.position.y = 0.3; grp.rotation.y = Math.atan2(by, bx);
+    return grp;
+  }
+
+  function buildVillage() {
+    decoGroup.clear(); grid.visible = false;
+    const rand = rngFrom(4242);
+
+    // Place centrale + chemins + bâtiments.
+    const plaza = new THREE.Mesh(new THREE.CircleGeometry(26, 40), plazaMat);
+    plaza.rotation.x = -Math.PI / 2; plaza.position.y = 0.31; decoGroup.add(plaza);
+    const well = new THREE.Mesh(new THREE.CylinderGeometry(4, 4.5, 4, 16), std(0x8a8f98)); well.position.y = 2; decoGroup.add(well);
+
+    const defs = [
+      { name: "⛩️ Temple", make: bTemple, x: 0, y: 155 },
+      { name: "🎓 Académie", make: bAcademy, x: -135, y: 108 },
+      { name: "🛒 Boutique", make: bShop, x: 135, y: 108 },
+      { name: "⚔️ Forge d'armes", make: bForgeWeapon, x: -180, y: 8 },
+      { name: "🛡️ Forge d'armures", make: bForgeArmor, x: 180, y: 8 },
+    ];
+    defs.forEach(d => {
+      decoGroup.add(pathTo(d.x, d.y, 10));
+      const pad = new THREE.Mesh(new THREE.CircleGeometry(26, 28), plazaMat);
+      pad.rotation.x = -Math.PI / 2; pad.position.set(d.x, 0.33, -d.y); decoGroup.add(pad);
+      const b = d.make(); b.position.set(d.x, 0, -d.y); b.rotation.y = Math.atan2(-d.x, d.y); decoGroup.add(b);
+      const label = makeLabel(); updateLabel(label, d.name, 0, 0, "");
+      label.position.set(d.x, 46, -d.y); label.scale.set(52, 13, 1); decoGroup.add(label);
+    });
+
+    // Nature : herbe, fleurs, arbres — évite la place et les emplacements.
+    const occupied = (x, z) => Math.hypot(x, z) < 34 || defs.some(d => Math.hypot(x - d.x, z + d.y) < 34);
+    for (let i = 0; i < 90; i++) { const x = (rand() * 2 - 1) * 460, z = (rand() * 2 - 1) * 460; if (occupied(x, z)) continue; decoGroup.add(grassPatch(x, z, 4 + rand() * 8, rand() > .5 ? 0x4a8a3a : 0x3f7a34)); }
+    const fcol = [0xff5d6c, 0xffd24a, 0xd98cff, 0xffffff, 0x6ee7ff, 0xff9ad0];
+    for (let i = 0; i < 55; i++) { const x = (rand() * 2 - 1) * 465, z = (rand() * 2 - 1) * 465; if (occupied(x, z)) continue; const f = flowerMesh(fcol[(rand() * fcol.length) | 0]); f.position.set(x, 0, z); decoGroup.add(f); }
+    for (let i = 0; i < 22; i++) { const x = (rand() * 2 - 1) * 450, z = (rand() * 2 - 1) * 450; if (Math.hypot(x, z) < 130 || occupied(x, z)) continue; const t = treeMesh(rand); t.position.set(x, 0, z); decoGroup.add(t); }
+  }
+
+  // ── Bâtiments (volumes low-poly, art original) ──
+  // Base commune : murs + porte + fenêtres + toit à deux pans.
+  function houseBase(w, h, d, wall, roof) {
+    const g = new THREE.Group();
+    const walls = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), std(wall)); walls.position.y = h / 2; g.add(walls);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(w * 0.26, h * 0.55, 1), std(0x3a2a1a)); door.position.set(0, h * 0.275, d / 2 + 0.55); g.add(door);
+    const win = (x) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w * 0.15, h * 0.22, 1), std(0x9fd0e0, 0.35)); m.position.set(x, h * 0.62, d / 2 + 0.55); g.add(m); };
+    win(-w * 0.3); win(w * 0.3);
+    const slope = Math.atan2(h * 0.5, w * 0.5), panel = Math.hypot(w * 0.5, h * 0.5) + 2;
+    const rl = new THREE.Mesh(new THREE.BoxGeometry(panel, 1.4, d + 3), std(roof)); rl.position.set(-w * 0.25, h + h * 0.24, 0); rl.rotation.z = slope; g.add(rl);
+    const rr = new THREE.Mesh(new THREE.BoxGeometry(panel, 1.4, d + 3), std(roof)); rr.position.set(w * 0.25, h + h * 0.24, 0); rr.rotation.z = -slope; g.add(rr);
+    return g;
+  }
+  function anvil(x, y, z) {
+    const g = new THREE.Group(); g.position.set(x, y, z);
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 5), std(0x33373f)); base.position.y = 1.5; g.add(base);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.6, 7), std(0x55595f)); top.position.y = 4; g.add(top);
+    const horn = new THREE.Mesh(new THREE.ConeGeometry(1.1, 3.2, 8), std(0x55595f)); horn.rotation.z = -Math.PI / 2; horn.position.set(4.6, 4, 0); g.add(horn);
+    return g;
+  }
+  const emberMat = new THREE.MeshStandardMaterial({ color: 0xff7a3a, emissive: 0xff4a10, emissiveIntensity: 1 });
+
+  function bTemple() {
+    const g = new THREE.Group(), stone = 0xcdd3da;
+    const base = new THREE.Mesh(new THREE.BoxGeometry(42, 4, 30), std(0xb9bfc6)); base.position.y = 2; g.add(base);
+    for (let i = 0; i < 5; i++) { const c = new THREE.Mesh(new THREE.CylinderGeometry(1.9, 1.9, 20, 12), std(stone)); c.position.set(-16 + i * 8, 14, 12); g.add(c); }
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(38, 20, 4), std(stone)); wall.position.set(0, 14, -12); g.add(wall);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(46, 3, 34), std(0x8f96a0)); roof.position.y = 25.5; g.add(roof);
+    const orb = new THREE.Mesh(new THREE.SphereGeometry(2.6, 16, 12), new THREE.MeshStandardMaterial({ color: 0xffcf5c, emissive: 0x996f16, emissiveIntensity: 0.5 })); orb.position.y = 30; g.add(orb);
+    return g;
+  }
+  function bAcademy() {
+    const g = new THREE.Group();
+    g.add(houseBase(30, 16, 22, 0xd9c9a3, 0x7a5230));
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(4, 4.6, 26, 12), std(0xc7b58c)); tower.position.set(12, 13, -3); g.add(tower);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(5.6, 9, 12), std(0x3a5db0)); cap.position.set(12, 30.5, -3); g.add(cap);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 10, 6), std(0x555)); pole.position.set(12, 40, -3); g.add(pole);
+    const flag = new THREE.Mesh(new THREE.BoxGeometry(7, 4, 0.3), std(0x3a5db0)); flag.position.set(15.5, 42, -3); g.add(flag);
+    return g;
+  }
+  function bShop() {
+    const g = new THREE.Group();
+    g.add(houseBase(28, 14, 20, 0xc98f4a, 0x8a4a26));
+    const aw = new THREE.Mesh(new THREE.BoxGeometry(22, 0.8, 7), std(0xd94f4f, 0.7)); aw.position.set(0, 10.5, 11.5); aw.rotation.x = 0.5; g.add(aw);
+    const crate = (x, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4), std(0x8a5a2a)); m.position.set(x, 2, z); g.add(m); };
+    crate(-11, 13); crate(12, 12.5); crate(-11, 13); const barrel = new THREE.Mesh(new THREE.CylinderGeometry(2, 2, 5, 12), std(0x6b4a26)); barrel.position.set(12, 2.5, 13); g.add(barrel);
+    return g;
+  }
+  function forgeBody(accent) {
+    const g = new THREE.Group();
+    g.add(houseBase(26, 13, 20, 0x8a8f98, 0x3a3f48));
+    const ch = new THREE.Mesh(new THREE.BoxGeometry(4, 11, 4), std(0x55595f)); ch.position.set(-9, 20, -4); g.add(ch);
+    const ember = new THREE.Mesh(new THREE.SphereGeometry(1.5, 10, 8), emberMat); ember.position.set(-9, 27, -4); g.add(ember);
+    g.add(anvil(6, 0, 13));
+    return g;
+  }
+  function bForgeWeapon() {
+    const g = forgeBody(); // accent rouge : deux épées croisées près de la porte
+    const sword = (rot) => { const s = new THREE.Group(); const bl = new THREE.Mesh(new THREE.BoxGeometry(0.7, 12, 1.8), std(0xdfe7f5, 0.3)); bl.position.y = 5; s.add(bl); const gu = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.9, 4), std(0xd94f4f)); gu.position.y = -1; s.add(gu); s.position.set(-9, 6, 12); s.rotation.z = rot; return s; };
+    g.add(sword(0.5)); g.add(sword(-0.5));
+    return g;
+  }
+  function bForgeArmor() {
+    const g = forgeBody(); // accent bleu : bouclier appuyé près de la porte
+    const shield = new THREE.Mesh(new THREE.CylinderGeometry(3.6, 3.6, 0.7, 18), new THREE.MeshStandardMaterial({ color: 0x5a7fd0, metalness: 0.6, roughness: 0.4 }));
+    shield.rotation.x = Math.PI / 2; shield.rotation.z = 0.25; shield.position.set(-9, 4, 12); g.add(shield);
+    return g;
   }
 
   // ── Synchronisation état → meshes 3D ──
@@ -782,7 +905,7 @@
   // Héros : silhouette HUMANOÏDE aux proportions humaines, sans arme.
   // Formes arrondies (capsules/sphères, segments élevés) : torse, bassin,
   // jambes avec chaussures, bras articulés avec mains, cou, tête et cheveux.
-  const std = (c, r) => new THREE.MeshStandardMaterial({ color: c, roughness: r === undefined ? 0.85 : r });
+  // (std/rngFrom sont définis plus haut, dans la section décor.)
   function heroMesh(elem) {
     const p = ELEM3D[elem] || ELEM3D.feu;
     const g = new THREE.Group(), u = g.userData;
