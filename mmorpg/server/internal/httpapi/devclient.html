@@ -167,6 +167,14 @@
       <div class="stat"><span>Agilité</span><span id="sAgi">—</span></div>
       <div class="kv" style="margin-top:8px"><span>💰 Or</span><b id="gold">0</b></div>
       <div class="kv"><span>🧪 Potions</span><b id="potions">0</b></div>
+      <div class="row" style="margin-top:6px"><button id="btnDrink" class="sm ghost" disabled>Boire une potion</button></div>
+    </div>
+
+    <div class="card" id="villageCard" style="display:none">
+      <h3>🏠 Services du village</h3>
+      <div id="vAcademy"></div>
+      <div id="vTemple" style="margin-top:10px"></div>
+      <div id="vShop" style="margin-top:10px"></div>
     </div>
 
     <div class="card">
@@ -276,6 +284,7 @@
     S.ground.clear(); (s.ground || []).forEach(g => S.ground.set(g.item_id, g));
     S.portals = s.portals || [];
     $("zoneInfo").innerHTML = "📍 <b>" + s.zone_name + "</b> · palier " + tierLabel(s.tier) + (s.pvp ? " · <span style='color:var(--err)'>PvP</span>" : "");
+    renderVillage(); // affiche/masque les services selon le palier
     log("Entrée dans " + s.zone_name);
   }
 
@@ -305,7 +314,53 @@
     $("sAgi").innerHTML = statLine(c.agi, c.agi_bonus);
     $("gold").textContent = c.gold;
     $("potions").textContent = c.potions;
+    $("btnDrink").disabled = !(c.potions > 0 && c.hp < c.max_hp);
+    renderVillage();
   }
+  $("btnDrink").onclick = () => send("char.use_potion", {});
+
+  // ── Services du village (académie / temple / boutique) ──
+  function renderVillage() {
+    const card = $("villageCard"), c = S.char;
+    if (S.tier !== "village" || !c) { card.style.display = "none"; return; }
+    card.style.display = "block";
+
+    // Académie : répartir les points d'attribut.
+    const aca = $("vAcademy"); aca.innerHTML = "";
+    aca.appendChild(h4("🎓 Académie"));
+    aca.appendChild(muted("Points : " + c.attr_points + (c.perfect_points ? "  ·  parfaits : " + c.perfect_points : "")));
+    [["str", "Attaque"], ["def", "Défense"], ["agi", "Agilité"]].forEach(([k, label]) => {
+      const row = document.createElement("div"); row.className = "item";
+      row.innerHTML = "<div class='n'>" + label + (k === c.spec_stat ? " ★" : "") + "</div>";
+      row.appendChild(mkBtn("+", c.attr_points < 1, () => send("char.spend_attr", { attr: k, perfect: false })));
+      if (c.perfect_points > 0) row.appendChild(mkBtn("+ parfait", false, () => send("char.spend_attr", { attr: k, perfect: true })));
+      aca.appendChild(row);
+    });
+
+    // Temple : apprendre des techniques.
+    const tmp = $("vTemple"); tmp.innerHTML = "";
+    tmp.appendChild(h4("⛩️ Temple"));
+    tmp.appendChild(muted("Points de technique : " + c.tech_points));
+    const learned = new Set(c.learned_techs || []);
+    (c.techniques || []).forEach(t => {
+      const row = document.createElement("div"); row.className = "item";
+      row.innerHTML = "<div class='n'>" + t.name + " <small>(" + t.cost + " én.)</small>" + (learned.has(t.id) ? " <span class='eq'>APPRISE</span>" : "") + "</div>";
+      if (!learned.has(t.id)) row.appendChild(mkBtn("Apprendre", c.tech_points < 1, () => send("char.learn_tech", { tech_id: t.id })));
+      tmp.appendChild(row);
+    });
+
+    // Boutique : acheter des potions.
+    const shop = $("vShop"); shop.innerHTML = "";
+    shop.appendChild(h4("🛒 Boutique"));
+    const row = document.createElement("div"); row.className = "item";
+    row.innerHTML = "<div class='n'>🧪 Potion de soin <small>(25 or)</small></div>";
+    row.appendChild(mkBtn("Acheter", c.gold < 25, () => send("char.buy_potion", {})));
+    shop.appendChild(row);
+  }
+  function h4(t) { const d = document.createElement("div"); d.style.cssText = "font-weight:600;margin:6px 0 4px"; d.textContent = t; return d; }
+  function muted(t) { const d = document.createElement("div"); d.className = "empty"; d.textContent = t; return d; }
+  function mkBtn(label, disabled, fn) { const b = document.createElement("button"); b.className = "sm ghost"; b.textContent = label; b.disabled = disabled; b.onclick = fn; return b; }
+
   function statLine(base, bonus) { const b = Math.round(base * 10) / 10; return b + (bonus > 0 ? " <span class='bonus'>(+" + (Math.round(bonus * 10) / 10) + ")</span>" : ""); }
   function pct(a, b) { return Math.max(0, Math.min(100, b ? (a / b * 100) : 0)) + "%"; }
   function elementEmoji(e) { return { feu: "🔥", eau: "💧", terre: "🌿" }[e] || "⚔️"; }
@@ -452,12 +507,27 @@
   function resize() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); }
   window.addEventListener("resize", resize);
 
-  const SCALE = 0.62;
-  function draw() {
+  const SCALE = 0.92;
+  let lastT = performance.now(), camX = 0, camY = 0, camInit = false;
+  function draw(now) {
     requestAnimationFrame(draw);
+    const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+    // Lissage exponentiel (indépendant du framerate) : rend le déplacement fluide
+    // malgré des positions serveur reçues ~20 fois/seconde.
+    const a = 1 - Math.exp(-dt / 0.06);
+
+    // Interpole la position affichée (rx, ry) de chaque entité vers sa position
+    // serveur (x, y).
+    S.entities.forEach(e => {
+      if (e.rx === undefined) { e.rx = e.x; e.ry = e.y; }
+      e.rx += (e.x - e.rx) * a; e.ry += (e.y - e.ry) * a;
+    });
+
     const W = cv.width / devicePixelRatio, H = cv.height / devicePixelRatio;
     ctx.clearRect(0, 0, W, H);
-    const p = me(); const camX = p ? p.x : 0, camY = p ? p.y : 0;
+    // Caméra centrée sur l'avatar lissé → le monde défile en douceur.
+    const p = me();
+    if (p) { if (!camInit) { camX = p.rx; camY = p.ry; camInit = true; } camX = p.rx; camY = p.ry; }
     const toS = (x, y) => ({ x: W / 2 + (x - camX) * SCALE, y: H / 2 - (y - camY) * SCALE });
 
     // fond + grille
@@ -481,9 +551,9 @@
       ctx.fillStyle = css("--gold"); ctx.font = "10px system-ui"; ctx.textAlign = "center"; ctx.fillText(it.name, s.x, s.y + 18);
     });
 
-    // entités
+    // entités (position lissée rx, ry)
     S.entities.forEach(e => {
-      const s = toS(e.x, e.y); const self = e.character_id === S.self;
+      const s = toS(e.rx, e.ry); const self = e.character_id === S.self;
       const col = e.mob ? css("--mob") : self ? css("--ok") : factionCol(e.faction_id);
       ctx.beginPath(); ctx.arc(s.x, s.y, self ? 11 : 9, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill();
       if (self) { ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.stroke(); }
@@ -500,7 +570,7 @@
   }
   function factionCol(id) { return id === 2 ? css("--eau") : id === 3 ? css("--terre") : id === 1 ? css("--feu") : css("--accent"); }
 
-  draw();
+  requestAnimationFrame(draw);
   log("Bienvenue. Connecte-toi pour entrer dans le monde.");
 })();
 </script>

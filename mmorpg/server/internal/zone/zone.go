@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	moveSpeedPerSec = 48
+	moveSpeedPerSec = 130 // vitesse de déplacement (unités/seconde)
 	worldBound      = 480
 	mailboxSize     = 256
 
