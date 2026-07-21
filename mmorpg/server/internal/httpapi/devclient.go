@@ -13,6 +13,19 @@ import (
 //go:embed devclient.html
 var devClientHTML []byte
 
+// threeJS est la bibliothèque de rendu 3D (three.js, build UMD), embarquée dans
+// le binaire et servie sous /libs/ : le client 3D fonctionne sans internet.
+//
+//go:embed three.min.js
+var threeJS []byte
+
+// handleThreeJS sert la bibliothèque 3D du client.
+func (s *Server) handleThreeJS(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	_, _ = w.Write(threeJS)
+}
+
 // handleDevClient sert le client. Servi par le serveur lui-même, il partage son
 // origine : ni CORS ni préflight à gérer.
 func (s *Server) handleDevClient(w http.ResponseWriter, _ *http.Request) {

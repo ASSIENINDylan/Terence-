@@ -36,8 +36,9 @@ func New(db, cache Pinger, authSvc *auth.Service, gateway http.Handler) *Server 
 // Handler retourne le routeur HTTP racine.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	// Page de test (harnais de dev) servie à la racine exacte.
+	// Client de jeu servi à la racine exacte, et sa bibliothèque 3D embarquée.
 	mux.HandleFunc("GET /{$}", s.handleDevClient)
+	mux.HandleFunc("GET /libs/three.min.js", s.handleThreeJS)
 	// Liveness : le process répond-il ? (aucune dépendance externe testée)
 	mux.HandleFunc("GET /healthz", s.handleLiveness)
 	// Readiness : DB et Redis répondent-ils ? Critère de validation de T0.

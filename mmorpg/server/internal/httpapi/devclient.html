@@ -192,6 +192,7 @@
   </div>
 </div>
 
+<script src="/libs/three.min.js"></script>
 <script>
 (function () {
   const base = location.origin;
@@ -517,214 +518,320 @@
   function tryPickup() { if (nearItem) send("item.pickup", { item_id: nearItem.item_id }); }
   function tryTransition() { if (nearPortal) send("zone.transition", { link_id: nearPortal.link_id }); }
 
-  // ── Rendu ──
-  const cv = $("view"), ctx = cv.getContext("2d");
-  function resize() { const r = cv.getBoundingClientRect(); cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio; ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0); }
+  // ══════════ Rendu 3D (three.js, WebGL) ══════════
+  //
+  // Repère : le monde serveur (x, y) est posé sur le plan du sol → three.js
+  // (x, 0, -y). La caméra 3e personne suit le joueur, légèrement en hauteur.
+  const cv = $("view");
+  const renderer = new THREE.WebGLRenderer({ canvas: cv, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, 1, 1, 3000);
+  let camInit = false;
+  const camPos = new THREE.Vector3(0, 95, 135), camTarget = new THREE.Vector3(0, 10, 0);
+
+  function resize() {
+    const r = cv.getBoundingClientRect();
+    renderer.setSize(Math.max(1, r.width), Math.max(1, r.height), false);
+    camera.aspect = Math.max(1, r.width) / Math.max(1, r.height);
+    camera.updateProjectionMatrix();
+  }
   window.addEventListener("resize", resize);
 
-  const SCALE = 0.92;
-  let lastT = performance.now(), camX = 0, camY = 0, camInit = false;
-  function draw(now) {
-    requestAnimationFrame(draw);
+  // Lumières : ambiance + soleil directionnel.
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.15);
+  sun.position.set(140, 260, 100); scene.add(sun);
+
+  // Sol + grille discrète.
+  const groundMat = new THREE.MeshLambertMaterial({ color: 0x1f3d24 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1500, 1500), groundMat);
+  ground.rotation.x = -Math.PI / 2; scene.add(ground);
+  const grid = new THREE.GridHelper(960, 24, 0x4a5a70, 0x2e3a4e);
+  grid.position.y = 0.2; grid.material.transparent = true; grid.material.opacity = 0.30; scene.add(grid);
+
+  // Thème par palier : couleur du sol, ciel, brouillard, décor.
+  const THEME = {
+    village: { ground: 0x2c4a28, sky: 0x101d12, deco: "tree" },
+    green:   { ground: 0x1f3d24, sky: 0x0b150e, deco: "tree" },
+    orange:  { ground: 0x3f2d14, sky: 0x160e07, deco: "rock" },
+    red:     { ground: 0x381318, sky: 0x120609, deco: "spike" },
+  };
+  const decoGroup = new THREE.Group(); scene.add(decoGroup);
+  let lastTier = null;
+  function applyTheme() {
+    const t = THEME[S.tier] || { ground: 0x1c2c40, sky: 0x0b1120, deco: "tree" };
+    groundMat.color.setHex(t.ground);
+    scene.background = new THREE.Color(t.sky);
+    scene.fog = new THREE.Fog(t.sky, 280, 1200);
+    rebuildDeco(t.deco);
+  }
+
+  // Décor : arbres / rochers / pics selon le palier, placés de façon
+  // déterministe (même décor pour tous les joueurs d'une zone).
+  function rebuildDeco(kind) {
+    decoGroup.clear();
+    let seed = 1234 + (S.zoneId || 0) * 77;
+    const rand = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 26; i++) {
+      const x = (rand() * 2 - 1) * 440, z = (rand() * 2 - 1) * 440;
+      if (Math.hypot(x, z) < 90) continue; // zone de spawn dégagée
+      const g = new THREE.Group();
+      if (kind === "tree") {
+        const trunk = new THREE.Mesh(new THREE.CylinderGeometry(1.8, 2.4, 9, 8), new THREE.MeshLambertMaterial({ color: 0x5a3d24 }));
+        trunk.position.y = 4.5; g.add(trunk);
+        const fol = new THREE.Mesh(new THREE.ConeGeometry(9 + rand() * 4, 20 + rand() * 8, 9), new THREE.MeshLambertMaterial({ color: rand() > .5 ? 0x2e6b34 : 0x3a7d3c }));
+        fol.position.y = 18; g.add(fol);
+      } else if (kind === "rock") {
+        const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(5 + rand() * 5), new THREE.MeshLambertMaterial({ color: 0x6b5a44 }));
+        rock.position.y = 3.5; rock.rotation.set(rand() * 3, rand() * 3, rand() * 3); g.add(rock);
+      } else {
+        const spike = new THREE.Mesh(new THREE.ConeGeometry(3.5 + rand() * 2.5, 18 + rand() * 10, 6), new THREE.MeshLambertMaterial({ color: 0x4a1f26 }));
+        spike.position.y = 9; spike.rotation.y = rand() * 3; g.add(spike);
+      }
+      g.position.set(x, 0, -z);
+      decoGroup.add(g);
+    }
+  }
+
+  // ── Synchronisation état → meshes 3D ──
+  const entMeshes = new Map(), itemMeshes = new Map(), portalMeshes = new Map();
+
+  function syncEntities(now) {
+    entMeshes.forEach((m, id) => { if (!S.entities.has(id)) { scene.remove(m); entMeshes.delete(id); } });
+    S.entities.forEach((e, id) => {
+      const self = id === S.self;
+      let m = entMeshes.get(id);
+      if (!m) {
+        m = e.mob ? mobMesh(S.tier || "green") : heroMesh(elemOf(e, self));
+        m.userData.label = makeLabel();
+        m.userData.label.position.y = 30;
+        m.add(m.userData.label);
+        if (self) {
+          const ring = new THREE.Mesh(new THREE.RingGeometry(7, 8.6, 32),
+            new THREE.MeshBasicMaterial({ color: 0x3ecf8e, transparent: true, opacity: 0.55, side: THREE.DoubleSide }));
+          ring.rotation.x = -Math.PI / 2; ring.position.y = 0.35; m.add(ring);
+        }
+        scene.add(m); entMeshes.set(id, m);
+      }
+      const moving = Math.hypot(e.x - e.rx, e.y - e.ry) > 0.4;
+      m.position.set(e.rx, moving ? Math.abs(Math.sin(now / 90)) * 1.3 : 0, -e.ry);
+      if (moving) m.rotation.y = Math.atan2(e.x - e.rx, -(e.y - e.ry));
+      const ph = moving ? Math.sin(now / 90) : 0;
+      const u = m.userData;
+      if (u.legL) { u.legL.rotation.x = ph * 0.75; u.legR.rotation.x = -ph * 0.75; }
+      if (u.armL) { u.armL.rotation.x = -ph * 0.6; u.armR.rotation.x = ph * 0.6; }
+      updateLabel(u.label, e.name + (self ? " (toi)" : ""), e.hp, e.max_hp,
+        e.mob ? "#ff5d6c" : self ? "#3ecf8e" : "#5fb0ff");
+    });
+  }
+
+  function syncItems(now) {
+    itemMeshes.forEach((m, id) => { if (!S.ground.has(id)) { scene.remove(m); itemMeshes.delete(id); } });
+    S.ground.forEach((it, id) => {
+      let m = itemMeshes.get(id);
+      if (!m) { m = gemMesh(it.name); m.position.set(it.x, 0, -it.y); scene.add(m); itemMeshes.set(id, m); }
+      const gem = m.userData.gem;
+      gem.rotation.y = now / 500;
+      gem.position.y = 7 + Math.sin(now / 300 + it.x) * 1.6;
+    });
+  }
+
+  function syncPortals() {
+    const want = new Set(S.portals.map(p => p.link_id));
+    portalMeshes.forEach((m, id) => { if (!want.has(id)) { scene.remove(m); portalMeshes.delete(id); } });
+    S.portals.forEach(pt => {
+      if (!portalMeshes.has(pt.link_id)) { const m = portalMesh(pt); scene.add(m); portalMeshes.set(pt.link_id, m); }
+    });
+  }
+
+  // ── Boucle d'animation ──
+  let lastT = performance.now();
+  function animate(now) {
+    requestAnimationFrame(animate);
     const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
-    // Lissage exponentiel (indépendant du framerate) : rend le déplacement fluide
-    // malgré des positions serveur reçues ~20 fois/seconde.
     const a = 1 - Math.exp(-dt / 0.06);
 
-    // Interpole la position affichée (rx, ry) de chaque entité vers sa position
-    // serveur (x, y).
+    if (S.tier !== lastTier) { lastTier = S.tier; applyTheme(); }
+
+    // Interpolation : positions affichées lissées vers les positions serveur.
     S.entities.forEach(e => {
       if (e.rx === undefined) { e.rx = e.x; e.ry = e.y; }
       e.rx += (e.x - e.rx) * a; e.ry += (e.y - e.ry) * a;
     });
 
-    const W = cv.width / devicePixelRatio, H = cv.height / devicePixelRatio;
-    ctx.clearRect(0, 0, W, H);
-    // Caméra centrée sur l'avatar lissé → le monde défile en douceur.
+    syncEntities(now); syncItems(now); syncPortals();
+
+    // Caméra 3e personne : suit le joueur avec un léger amorti.
     const p = me();
-    if (p) { if (!camInit) { camX = p.rx; camY = p.ry; camInit = true; } camX = p.rx; camY = p.ry; }
-    // Projection 2.5D : l'axe de profondeur (y monde) est comprimé verticalement
-    // (DEPTH) → le sol paraît incliné, vu en 3/4. Les sprites, eux, se dressent
-    // à la verticale sur leur point au sol.
-    const DEPTH = 0.58;
-    const toS = (x, y) => ({ x: W / 2 + (x - camX) * SCALE, y: H / 2 - (y - camY) * SCALE * DEPTH });
-    // Échelle de perspective : plus proche (bas de l'écran) = plus grand.
-    const pScaleAt = (sy) => 0.72 + 0.42 * Math.max(0, Math.min(1, sy / H));
-
-    // Fond dégradé (horizon sombre au loin → sol teinté selon le palier).
-    const BG = { village: ["#20321f", "#0c140d"], green: ["#183020", "#0a140e"], orange: ["#31220f", "#140c07"], red: ["#2a1016", "#120609"] }[S.tier] || ["#141c2c", "#0b1120"];
-    const grd = ctx.createLinearGradient(0, 0, 0, H);
-    grd.addColorStop(0, BG[1]); grd.addColorStop(0.42, BG[1]); grd.addColorStop(0.62, BG[0]); grd.addColorStop(1, BG[0]);
-    ctx.fillStyle = grd; ctx.fillRect(0, 0, W, H);
-
-    // Grille du sol (comprimée en profondeur → damier fuyant), estompée au loin.
-    const gv0 = toS(-480, 480), gv1 = toS(480, -480);
-    ctx.lineWidth = 1;
-    for (let gx = -480; gx <= 480; gx += 60) { const s = toS(gx, 0); ctx.strokeStyle = "rgba(255,255,255,.05)"; ctx.beginPath(); ctx.moveTo(s.x, gv0.y); ctx.lineTo(s.x, gv1.y); ctx.stroke(); }
-    for (let gy = -480; gy <= 480; gy += 60) { const s = toS(0, gy); const al = 0.02 + 0.06 * Math.max(0, Math.min(1, s.y / H)); ctx.strokeStyle = "rgba(255,255,255," + al.toFixed(3) + ")"; ctx.beginPath(); ctx.moveTo(gv0.x, s.y); ctx.lineTo(gv1.x, s.y); ctx.stroke(); }
-
-    // On rassemble sol (objets, portails) + entités et on trie par profondeur
-    // (du plus lointain au plus proche) : algorithme du peintre pour la 2.5D.
-    const drawList = [];
-    S.portals.forEach(pt => drawList.push({ y: pt.y, kind: "portal", pt }));
-    S.ground.forEach(it => drawList.push({ y: it.y, kind: "item", it }));
-    S.entities.forEach(e => drawList.push({ y: e.ry, kind: "entity", e }));
-    drawList.sort((a, b) => b.y - a.y); // grand y (loin) d'abord
-
-    drawList.forEach(o => {
-      if (o.kind === "portal") {
-        const s = toS(o.pt.x, o.pt.y), ds = pScaleAt(s.y);
-        drawPortal(s, o.pt, ds);
-      } else if (o.kind === "item") {
-        const s = toS(o.it.x, o.it.y), ds = pScaleAt(s.y);
-        drawGroundItem(s, o.it, ds, now);
-      } else {
-        const s = toS(o.e.rx, o.e.ry), ds = pScaleAt(s.y);
-        drawEntity(o.e, s, o.e.character_id === S.self, now, ds);
-      }
-    });
-
+    if (p) {
+      const want = new THREE.Vector3(p.rx, 95, -p.ry + 135);
+      if (!camInit) { camPos.copy(want); camInit = true; }
+      camPos.lerp(want, 1 - Math.exp(-dt / 0.10));
+      camera.position.copy(camPos);
+      camTarget.set(p.rx, 10, -p.ry);
+      camera.lookAt(camTarget);
+    }
+    renderer.render(scene, camera);
     updateContext();
   }
-  function factionCol(id) { return id === 2 ? css("--eau") : id === 3 ? css("--terre") : id === 1 ? css("--feu") : css("--accent"); }
 
-  // ══════════ Sprites dessinés (style chibi RPG, art original) ══════════
-  function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
-  function circ(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+  // ══════════ Personnages & objets 3D (volumes low-poly, art original) ══════════
+  const lam = (c) => new THREE.MeshLambertMaterial({ color: c });
 
-  const ELEM = {
-    feu:   { cloak: "#e0492e", trim: "#ffb04a", skin: "#f0c49a", hair: "#3a2418", glow: "#ff7a3a" },
-    eau:   { cloak: "#2f6bd6", trim: "#8fe3ff", skin: "#f0c49a", hair: "#24344d", glow: "#5fb0ff" },
-    terre: { cloak: "#3f9d4c", trim: "#cbf08a", skin: "#f0c49a", hair: "#2c3b22", glow: "#8fd66a" },
+  const ELEM3D = {
+    feu:   { cloak: 0xe0492e, trim: 0xffb04a, skin: 0xf0c49a, hair: 0x3a2418 },
+    eau:   { cloak: 0x2f6bd6, trim: 0x8fe3ff, skin: 0xf0c49a, hair: 0x24344d },
+    terre: { cloak: 0x3f9d4c, trim: 0xcbf08a, skin: 0xf0c49a, hair: 0x2c3b22 },
   };
-  const MOBP = {
-    green:  { body: "#7cbf4a", dark: "#4f8a2c", belly: "#c7e89a", eye: "#ffe14a", horn: "#eafcd4" },
-    orange: { body: "#d9843a", dark: "#a3541e", belly: "#f2c48a", eye: "#fff04a", horn: "#ffe0b0" },
-    red:    { body: "#b23a3a", dark: "#7a2020", belly: "#e08a7a", eye: "#ffd24a", horn: "#241010" },
+  const MOB3D = {
+    green:  { body: 0x7cbf4a, dark: 0x4f8a2c, belly: 0xc7e89a, eye: 0xffe14a },
+    orange: { body: 0xd9843a, dark: 0xa3541e, belly: 0xf2c48a, eye: 0xfff04a },
+    red:    { body: 0xb23a3a, dark: 0x7a2020, belly: 0xe08a7a, eye: 0xffd24a },
   };
 
-  function paletteFor(e, self) {
-    const el = self && S.char ? S.char.element : ({ 1: "feu", 2: "eau", 3: "terre" }[e.faction_id] || "feu");
-    return ELEM[el] || ELEM.feu;
+  function elemOf(e, self) {
+    return (self && S.char ? S.char.element : ({ 1: "feu", 2: "eau", 3: "terre" }[e.faction_id])) || "feu";
   }
 
-  function drawEntity(e, s, self, now, ds) {
-    ds = ds || 1;
-    const moving = Math.hypot(e.x - e.rx, e.y - e.ry) > 0.4;
-    const phase = moving ? Math.sin(now / 85) : Math.sin(now / 650) * 0.25;
-    ctx.save();
-    ctx.translate(s.x, s.y);
-    ctx.scale(ds, ds); // échelle de perspective (2.5D)
-    // ombre au sol (posée sur le point au sol)
-    ctx.fillStyle = "rgba(0,0,0,.38)"; ctx.beginPath(); ctx.ellipse(0, 2, 13, 4.5, 0, 0, Math.PI * 2); ctx.fill();
-    // halo pour soi
-    if (self) { ctx.fillStyle = "rgba(120,220,150,.14)"; circ(0, -14, 22); ctx.fill(); }
-    ctx.save();
-    ctx.scale(e.face || 1, 1);
-    // le sprite est dessiné debout : ses pieds reposent sur le point au sol.
-    ctx.translate(0, -14 + (moving ? -Math.abs(phase) * 2 : 0));
-    if (e.mob) mobSprite(S.tier || "green", phase);
-    else heroSprite(paletteFor(e, self), phase);
-    ctx.restore();
-    ctx.restore();
-    // barre de vie + nom, placés au-dessus de la tête du sprite (debout).
-    const top = s.y - 42 * ds;
-    if (e.max_hp) {
-      const w = 30, hpw = w * Math.max(0, e.hp / e.max_hp);
-      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(s.x - w / 2 - 1, top - 1, w + 2, 5);
-      ctx.fillStyle = e.mob ? "#ff5d6c" : self ? "#3ecf8e" : "#5fb0ff"; ctx.fillRect(s.x - w / 2, top, hpw, 3);
-    }
-    ctx.fillStyle = self ? "#eafff0" : css("--txt"); ctx.font = (self ? "bold " : "") + "11px system-ui"; ctx.textAlign = "center";
-    ctx.fillText(e.name + (self ? " (toi)" : ""), s.x, top - 6);
+  // Membre articulé : cylindre dont le pivot est en haut (hanche/épaule),
+  // pour l'animation de marche par rotation.
+  function limb(r, h, color, x, y, z) {
+    const geo = new THREE.CylinderGeometry(r, r * 0.8, h, 8);
+    geo.translate(0, -h / 2, 0);
+    const m = new THREE.Mesh(geo, lam(color));
+    m.position.set(x, y, z || 0);
+    return m;
   }
 
-  // Portail / barrière : arche debout sur le sol (billboard 2.5D).
-  function drawPortal(s, pt, ds) {
-    const barrier = pt.kind === "barrier", col = barrier ? "#ff5d6c" : "#6ee7ff";
-    ctx.save(); ctx.translate(s.x, s.y); ctx.scale(ds, ds);
-    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(0, 0, 16, 5, 0, 0, Math.PI * 2); ctx.fill();
-    const arch = () => { ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(-12, -22); ctx.arc(0, -22, 12, Math.PI, 0); ctx.lineTo(12, 0); };
-    ctx.globalAlpha = .22; ctx.fillStyle = col; arch(); ctx.closePath(); ctx.fill();
-    ctx.globalAlpha = .95; ctx.strokeStyle = col; ctx.lineWidth = 4; ctx.lineJoin = "round"; arch(); ctx.stroke();
-    ctx.globalAlpha = 1; ctx.restore();
-    ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui"; ctx.textAlign = "center";
-    ctx.fillText((barrier ? "⛔ " : "🚪 ") + pt.to_zone, s.x, s.y - 42 * ds);
+  function shadowBlob(rad) {
+    const m = new THREE.Mesh(new THREE.CircleGeometry(rad, 24),
+      new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 }));
+    m.rotation.x = -Math.PI / 2; m.position.y = 0.25;
+    return m;
   }
 
-  // Objet au sol : gemme dorée flottante avec halo (billboard 2.5D).
-  function drawGroundItem(s, it, ds, now) {
-    const bob = Math.sin(now / 300 + s.x) * 2;
-    ctx.save(); ctx.translate(s.x, s.y); ctx.scale(ds, ds);
-    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(0, 0, 7, 2.5, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.translate(0, -9 + bob);
-    ctx.fillStyle = css("--gold"); ctx.shadowColor = css("--gold"); ctx.shadowBlur = 9;
-    ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(6, 0); ctx.lineTo(0, 7); ctx.lineTo(-6, 0); ctx.closePath(); ctx.fill();
-    ctx.shadowBlur = 0; ctx.restore();
-    ctx.fillStyle = css("--gold"); ctx.font = "10px system-ui"; ctx.textAlign = "center";
-    ctx.fillText(it.name, s.x, s.y - 22 * ds);
+  // Héros : petit chevalier low-poly coloré par l'élément, épée en main.
+  function heroMesh(elem) {
+    const p = ELEM3D[elem] || ELEM3D.feu;
+    const g = new THREE.Group(), u = g.userData;
+    g.add(shadowBlob(7));
+    u.legL = limb(1.6, 6.5, 0x2a2f3e, -2.2, 7); g.add(u.legL);
+    u.legR = limb(1.6, 6.5, 0x2a2f3e, 2.2, 7); g.add(u.legR);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 4.8, 9, 10), lam(p.cloak));
+    body.position.y = 11; g.add(body);
+    const belt = new THREE.Mesh(new THREE.CylinderGeometry(4.5, 4.7, 1.3, 10), lam(p.trim));
+    belt.position.y = 7.4; g.add(belt);
+    u.armL = limb(1.25, 7, p.skin, -5, 15); u.armL.rotation.z = 0.18; g.add(u.armL);
+    u.armR = limb(1.25, 7, p.skin, 5, 15); u.armR.rotation.z = -0.18; g.add(u.armR);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(5.2, 16, 12), lam(p.skin));
+    head.position.y = 20.6; g.add(head);
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(5.45, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2.1), lam(p.hair));
+    hair.position.y = 20.9; g.add(hair);
+    const eye = (x) => { const m = new THREE.Mesh(new THREE.SphereGeometry(0.85, 8, 8), new THREE.MeshBasicMaterial({ color: 0x1a2030 })); m.position.set(x, 20.6, 4.5); g.add(m); };
+    eye(-1.9); eye(1.9);
+    // épée (lame + garde) dans la main droite, pointée vers l'avant
+    const sword = new THREE.Group();
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(0.8, 11, 2.2),
+      new THREE.MeshStandardMaterial({ color: 0xdfe7f5, metalness: 0.75, roughness: 0.3 }));
+    blade.position.y = 6.2; sword.add(blade);
+    const guard = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 4.6), lam(p.trim));
+    guard.position.y = 0.8; sword.add(guard);
+    sword.position.set(6.4, 8.6, 1.2); sword.rotation.x = -0.5;
+    g.add(sword);
+    return g;
   }
 
-  // Héros chibi : grosse tête, tunique colorée par l'élément, épée.
-  function heroSprite(p, ph) {
-    const sw = ph * 3;
-    // jambes + bottes
-    ctx.fillStyle = "#2a2f3e"; rr(-6, 5, 4.5, 9 + sw, 2); ctx.fill(); rr(1.5, 5, 4.5, 9 - sw, 2); ctx.fill();
-    ctx.fillStyle = p.trim; rr(-6.5, 12 + sw, 5.5, 3, 1.5); ctx.fill(); rr(1, 12 - sw, 5.5, 3, 1.5); ctx.fill();
-    // bras arrière
-    ctx.strokeStyle = p.skin; ctx.lineWidth = 4; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(-6, -3); ctx.lineTo(-10, 3 - sw * 0.4); ctx.stroke();
-    // torse (tunique) + ceinture
-    ctx.fillStyle = p.cloak; rr(-8, -7, 16, 13, 5); ctx.fill();
-    ctx.fillStyle = p.trim; ctx.fillRect(-8, 3, 16, 2);
-    ctx.fillStyle = "rgba(255,255,255,.12)"; rr(-8, -7, 5, 13, 5); ctx.fill();
-    // bras avant + épée
-    ctx.strokeStyle = p.skin; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(6, -3); ctx.lineTo(11, 3 + sw * 0.4); ctx.stroke();
-    ctx.strokeStyle = "#dfe7f5"; ctx.lineWidth = 3; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(11, 4); ctx.lineTo(16, -10); ctx.stroke();
-    ctx.fillStyle = p.trim; ctx.fillRect(8.5, 2.5, 6, 2.2);
-    // tête
-    ctx.fillStyle = p.skin; circ(0, -14, 8); ctx.fill();
-    // cheveux (calotte)
-    ctx.fillStyle = p.hair; ctx.beginPath(); ctx.arc(0, -14, 8, Math.PI * 1.02, Math.PI * 2 - 0.06); ctx.fill();
-    ctx.fillRect(-8, -15, 16, -3);
-    // yeux + sourire
-    ctx.fillStyle = "#1a2030"; circ(-3, -13, 1.5); ctx.fill(); circ(3, -13, 1.5); ctx.fill();
-    ctx.strokeStyle = "#b5644a"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, -11, 2.4, 0.2, Math.PI - 0.2); ctx.stroke();
-  }
-
-  // Monstre chibi selon le palier : lutin (vert), maraudeur (orange), damné (rouge).
-  function mobSprite(tier, ph) {
-    const p = MOBP[tier] || MOBP.green; const sw = ph * 2;
-    // pieds
-    ctx.fillStyle = p.dark; rr(-6, 10, 5, 5 + sw, 2); ctx.fill(); rr(1, 10, 5, 5 - sw, 2); ctx.fill();
-    // corps (poire) + ventre
-    ctx.fillStyle = p.body; ctx.beginPath(); ctx.ellipse(0, 2, 11, 12, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = p.belly; ctx.beginPath(); ctx.ellipse(0, 5, 6, 7, 0, 0, Math.PI * 2); ctx.fill();
-    // bras griffus
-    ctx.strokeStyle = p.body; ctx.lineWidth = 4.5; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(-9, -1); ctx.lineTo(-13, 6 + sw); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(9, -1); ctx.lineTo(13, 6 - sw); ctx.stroke();
-    // tête
-    ctx.fillStyle = p.body; circ(0, -9, 9); ctx.fill();
-    if (tier === "red") { // cornes de démon
-      ctx.fillStyle = p.horn === "#241010" ? "#e8e0d0" : p.horn;
-      ctx.beginPath(); ctx.moveTo(-7, -14); ctx.lineTo(-11, -22); ctx.lineTo(-4, -15); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(7, -14); ctx.lineTo(11, -22); ctx.lineTo(4, -15); ctx.fill();
+  // Monstre : créature trapue selon le palier (lutin vert à oreilles,
+  // maraudeur orange, damné rouge à cornes), yeux lumineux.
+  function mobMesh(tier) {
+    const p = MOB3D[tier] || MOB3D.green;
+    const g = new THREE.Group(), u = g.userData;
+    g.add(shadowBlob(8));
+    u.legL = limb(1.8, 4.5, p.dark, -3, 5); g.add(u.legL);
+    u.legR = limb(1.8, 4.5, p.dark, 3, 5); g.add(u.legR);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(7, 14, 12), lam(p.body));
+    body.scale.set(1, 1.15, 0.95); body.position.y = 11; g.add(body);
+    const belly = new THREE.Mesh(new THREE.SphereGeometry(4.6, 12, 10), lam(p.belly));
+    belly.scale.set(1, 1.2, 0.6); belly.position.set(0, 9.6, 4.6); g.add(belly);
+    u.armL = limb(1.7, 6.5, p.body, -7, 13); u.armL.rotation.z = 0.35; g.add(u.armL);
+    u.armR = limb(1.7, 6.5, p.body, 7, 13); u.armR.rotation.z = -0.35; g.add(u.armR);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(5.6, 14, 12), lam(p.body));
+    head.position.y = 21; g.add(head);
+    if (tier === "red") { // cornes
+      const horn = (x) => { const m = new THREE.Mesh(new THREE.ConeGeometry(1.3, 5.5, 8), lam(0xe8e0d0)); m.position.set(x, 26, 0); m.rotation.z = x < 0 ? 0.5 : -0.5; g.add(m); };
+      horn(-3.6); horn(3.6);
     } else { // oreilles pointues
-      ctx.fillStyle = p.body;
-      ctx.beginPath(); ctx.moveTo(-8, -11); ctx.lineTo(-14, -16); ctx.lineTo(-6, -6); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(8, -11); ctx.lineTo(14, -16); ctx.lineTo(6, -6); ctx.fill();
+      const ear = (x) => { const m = new THREE.Mesh(new THREE.ConeGeometry(1.6, 5.5, 8), lam(p.body)); m.position.set(x, 24.5, 0); m.rotation.z = x < 0 ? 1.1 : -1.1; g.add(m); };
+      ear(-5.6); ear(5.6);
     }
-    // yeux brillants
-    ctx.fillStyle = p.eye; circ(-3.4, -9, 2.4); ctx.fill(); circ(3.4, -9, 2.4); ctx.fill();
-    ctx.fillStyle = "#1a1010"; circ(-3.4, -9, 1); ctx.fill(); circ(3.4, -9, 1); ctx.fill();
-    // crocs
-    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(-3, -4); ctx.lineTo(-1.5, -1); ctx.lineTo(-0.5, -4); ctx.fill();
-    ctx.beginPath(); ctx.moveTo(3, -4); ctx.lineTo(1.5, -1); ctx.lineTo(0.5, -4); ctx.fill();
+    const eye = (x) => { const m = new THREE.Mesh(new THREE.SphereGeometry(1.25, 8, 8), new THREE.MeshBasicMaterial({ color: p.eye })); m.position.set(x, 21.6, 4.8); g.add(m); };
+    eye(-2.3); eye(2.3);
+    return g;
   }
 
-  requestAnimationFrame(draw);
+  // Butin au sol : gemme dorée en rotation + nom flottant.
+  function gemMesh(name) {
+    const g = new THREE.Group();
+    g.add(shadowBlob(4));
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(4),
+      new THREE.MeshStandardMaterial({ color: 0xffcf5c, emissive: 0xbb8a20, emissiveIntensity: 0.6, metalness: 0.5, roughness: 0.25 }));
+    gem.position.y = 7; g.add(gem);
+    g.userData.gem = gem;
+    const label = makeLabel(); updateLabel(label, name, 0, 0, ""); label.position.y = 15; label.scale.set(24, 6, 1); g.add(label);
+    return g;
+  }
+
+  // Portail / barrière : arche 3D lumineuse posée sur le sol.
+  function portalMesh(pt) {
+    const barrier = pt.kind === "barrier";
+    const col = barrier ? 0xff5d6c : 0x6ee7ff;
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 0.55 });
+    const arch = new THREE.Mesh(new THREE.TorusGeometry(11, 1.5, 10, 28, Math.PI), mat);
+    arch.position.y = 12; g.add(arch);
+    const pil = (x) => { const c = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.9, 12, 10), mat); c.position.set(x, 6, 0); g.add(c); };
+    pil(-11); pil(11);
+    const glow = new THREE.Mesh(new THREE.CircleGeometry(9.6, 24),
+      new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.18, side: THREE.DoubleSide }));
+    glow.position.y = 11.5; g.add(glow);
+    const label = makeLabel();
+    updateLabel(label, (barrier ? "⛔ " : "🚪 ") + pt.to_zone, 0, 0, "");
+    label.position.y = 32; g.add(label);
+    g.position.set(pt.x, 0, -pt.y);
+    return g;
+  }
+
+  // Étiquette flottante (nom + barre de vie) : sprite à texture canvas,
+  // toujours face caméra. Redessinée seulement quand son contenu change.
+  function makeLabel() {
+    const c = document.createElement("canvas"); c.width = 256; c.height = 64;
+    const tex = new THREE.CanvasTexture(c);
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    sp.scale.set(30, 7.5, 1);
+    sp.renderOrder = 999;
+    sp.userData = { canvas: c, tex, key: "" };
+    return sp;
+  }
+  function updateLabel(sp, name, hp, maxhp, color) {
+    const key = name + "|" + hp + "|" + maxhp + "|" + color;
+    if (sp.userData.key === key) return;
+    sp.userData.key = key;
+    const c = sp.userData.canvas, x = c.getContext("2d");
+    x.clearRect(0, 0, 256, 64);
+    x.font = "bold 24px system-ui"; x.textAlign = "center";
+    x.shadowColor = "rgba(0,0,0,.85)"; x.shadowBlur = 6;
+    x.fillStyle = "#f2f6ff"; x.fillText(name, 128, 28);
+    if (maxhp) {
+      x.shadowBlur = 0;
+      x.fillStyle = "rgba(0,0,0,.6)"; x.fillRect(58, 38, 140, 13);
+      x.fillStyle = color; x.fillRect(60, 40, 136 * Math.max(0, Math.min(1, hp / maxhp)), 9);
+    }
+    sp.userData.tex.needsUpdate = true;
+  }
+
+  resize();
+  requestAnimationFrame(animate);
   log("Bienvenue. Connecte-toi pour entrer dans le monde.");
 })();
 </script>
