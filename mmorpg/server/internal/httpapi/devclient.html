@@ -124,7 +124,10 @@
 <header style="display:none" id="topbar">
   <h1>⚔️ MMORPG v0.1</h1>
   <span class="sub">ZQSD / WASD / flèches pour marcher · <b>E</b> ramasser · <b>T</b> traverser un portail</span>
-  <span style="margin-left:auto">état : <span id="wsState" class="pill off">déconnecté</span></span>
+  <span style="margin-left:auto;display:flex;align-items:center;gap:10px">
+    état : <span id="wsState" class="pill off">déconnecté</span>
+    <button id="btnQuit" class="sm ghost">Se déconnecter</button>
+  </span>
 </header>
 
 <div id="game">
@@ -245,9 +248,21 @@
     const url = scheme + "://" + location.host + "/ws?token=" + encodeURIComponent(token) + "&element=" + encodeURIComponent(element);
     ws = new WebSocket(url);
     ws.onopen = () => { $("wsState").textContent = "connecté"; $("wsState").className = "pill on"; };
-    ws.onclose = () => { $("wsState").textContent = "déconnecté"; $("wsState").className = "pill off"; log("connexion fermée", "--err"); };
+    ws.onclose = () => { $("wsState").textContent = "déconnecté"; $("wsState").className = "pill off"; log("connexion fermée", "--err"); backToGate(); };
     ws.onerror = () => log("erreur WebSocket", "--err");
     ws.onmessage = (ev) => onMessage(ev.data);
+  }
+
+  // Déconnexion : ferme la socket (le serveur sauvegarde l'état) et revient à
+  // l'écran de connexion. keys vidées pour ne pas « coller » une direction.
+  $("btnQuit").onclick = () => { keys.clear(); if (ws && ws.readyState <= 1) ws.close(); else backToGate(); };
+  function backToGate() {
+    ws = null;
+    S.self = null; S.entities.clear(); S.ground.clear(); S.portals = []; S.combat = null; camInit = false;
+    $("combat").style.display = "none";
+    $("game").style.display = "none"; $("topbar").style.display = "none";
+    $("gate").style.display = "flex";
+    gateStatus("Déconnecté — ta progression est sauvegardée. Reconnecte-toi pour rejouer.", "ok");
   }
 
   function send(type, data) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type, seq: 0, data: data || {} })); }
@@ -528,36 +543,46 @@
     // Caméra centrée sur l'avatar lissé → le monde défile en douceur.
     const p = me();
     if (p) { if (!camInit) { camX = p.rx; camY = p.ry; camInit = true; } camX = p.rx; camY = p.ry; }
-    const toS = (x, y) => ({ x: W / 2 + (x - camX) * SCALE, y: H / 2 - (y - camY) * SCALE });
+    // Projection 2.5D : l'axe de profondeur (y monde) est comprimé verticalement
+    // (DEPTH) → le sol paraît incliné, vu en 3/4. Les sprites, eux, se dressent
+    // à la verticale sur leur point au sol.
+    const DEPTH = 0.58;
+    const toS = (x, y) => ({ x: W / 2 + (x - camX) * SCALE, y: H / 2 - (y - camY) * SCALE * DEPTH });
+    // Échelle de perspective : plus proche (bas de l'écran) = plus grand.
+    const pScaleAt = (sy) => 0.72 + 0.42 * Math.max(0, Math.min(1, sy / H));
 
-    // fond + grille
-    ctx.strokeStyle = "rgba(255,255,255,.045)"; ctx.lineWidth = 1;
-    const g0 = toS(-480, 480), g1 = toS(480, -480);
-    for (let gx = -480; gx <= 480; gx += 60) { const s = toS(gx, 0); ctx.beginPath(); ctx.moveTo(s.x, g0.y); ctx.lineTo(s.x, g1.y); ctx.stroke(); }
-    for (let gy = -480; gy <= 480; gy += 60) { const s = toS(0, gy); ctx.beginPath(); ctx.moveTo(g0.x, s.y); ctx.lineTo(g1.x, s.y); ctx.stroke(); }
+    // Fond dégradé (horizon sombre au loin → sol teinté selon le palier).
+    const BG = { village: ["#20321f", "#0c140d"], green: ["#183020", "#0a140e"], orange: ["#31220f", "#140c07"], red: ["#2a1016", "#120609"] }[S.tier] || ["#141c2c", "#0b1120"];
+    const grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, BG[1]); grd.addColorStop(0.42, BG[1]); grd.addColorStop(0.62, BG[0]); grd.addColorStop(1, BG[0]);
+    ctx.fillStyle = grd; ctx.fillRect(0, 0, W, H);
 
-    // portails
-    S.portals.forEach(pt => { const s = toS(pt.x, pt.y);
-      ctx.fillStyle = pt.kind === "barrier" ? "#ff5d6c" : "#6ee7ff"; ctx.globalAlpha = .85;
-      ctx.beginPath(); ctx.moveTo(s.x, s.y - 12); ctx.lineTo(s.x + 10, s.y); ctx.lineTo(s.x, s.y + 12); ctx.lineTo(s.x - 10, s.y); ctx.closePath(); ctx.fill();
-      ctx.globalAlpha = 1; ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui"; ctx.textAlign = "center";
-      ctx.fillText((pt.kind === "barrier" ? "⛔ " : "🚪 ") + pt.to_zone, s.x, s.y - 18);
+    // Grille du sol (comprimée en profondeur → damier fuyant), estompée au loin.
+    const gv0 = toS(-480, 480), gv1 = toS(480, -480);
+    ctx.lineWidth = 1;
+    for (let gx = -480; gx <= 480; gx += 60) { const s = toS(gx, 0); ctx.strokeStyle = "rgba(255,255,255,.05)"; ctx.beginPath(); ctx.moveTo(s.x, gv0.y); ctx.lineTo(s.x, gv1.y); ctx.stroke(); }
+    for (let gy = -480; gy <= 480; gy += 60) { const s = toS(0, gy); const al = 0.02 + 0.06 * Math.max(0, Math.min(1, s.y / H)); ctx.strokeStyle = "rgba(255,255,255," + al.toFixed(3) + ")"; ctx.beginPath(); ctx.moveTo(gv0.x, s.y); ctx.lineTo(gv1.x, s.y); ctx.stroke(); }
+
+    // On rassemble sol (objets, portails) + entités et on trie par profondeur
+    // (du plus lointain au plus proche) : algorithme du peintre pour la 2.5D.
+    const drawList = [];
+    S.portals.forEach(pt => drawList.push({ y: pt.y, kind: "portal", pt }));
+    S.ground.forEach(it => drawList.push({ y: it.y, kind: "item", it }));
+    S.entities.forEach(e => drawList.push({ y: e.ry, kind: "entity", e }));
+    drawList.sort((a, b) => b.y - a.y); // grand y (loin) d'abord
+
+    drawList.forEach(o => {
+      if (o.kind === "portal") {
+        const s = toS(o.pt.x, o.pt.y), ds = pScaleAt(s.y);
+        drawPortal(s, o.pt, ds);
+      } else if (o.kind === "item") {
+        const s = toS(o.it.x, o.it.y), ds = pScaleAt(s.y);
+        drawGroundItem(s, o.it, ds, now);
+      } else {
+        const s = toS(o.e.rx, o.e.ry), ds = pScaleAt(s.y);
+        drawEntity(o.e, s, o.e.character_id === S.self, now, ds);
+      }
     });
-
-    // objets au sol
-    S.ground.forEach(it => { const s = toS(it.x, it.y);
-      ctx.fillStyle = css("--gold");
-      ctx.beginPath(); ctx.moveTo(s.x, s.y - 7); ctx.lineTo(s.x + 6, s.y); ctx.lineTo(s.x, s.y + 7); ctx.lineTo(s.x - 6, s.y); ctx.closePath(); ctx.fill();
-      ctx.fillStyle = css("--gold"); ctx.font = "10px system-ui"; ctx.textAlign = "center"; ctx.fillText(it.name, s.x, s.y + 18);
-    });
-
-    // entités : mobs d'abord (dessous), héros au-dessus, soi en dernier.
-    const list = [...S.entities.values()].sort((a, b) => {
-      const ka = a.character_id === S.self ? 2 : a.mob ? 0 : 1;
-      const kb = b.character_id === S.self ? 2 : b.mob ? 0 : 1;
-      return ka - kb || (a.ry < b.ry ? 1 : -1);
-    });
-    list.forEach(e => drawEntity(e, toS(e.rx, e.ry), e.character_id === S.self, now));
 
     updateContext();
   }
@@ -583,30 +608,60 @@
     return ELEM[el] || ELEM.feu;
   }
 
-  function drawEntity(e, s, self, now) {
+  function drawEntity(e, s, self, now, ds) {
+    ds = ds || 1;
     const moving = Math.hypot(e.x - e.rx, e.y - e.ry) > 0.4;
     const phase = moving ? Math.sin(now / 85) : Math.sin(now / 650) * 0.25;
     ctx.save();
     ctx.translate(s.x, s.y);
-    // ombre au sol
-    ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0, 16, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.scale(ds, ds); // échelle de perspective (2.5D)
+    // ombre au sol (posée sur le point au sol)
+    ctx.fillStyle = "rgba(0,0,0,.38)"; ctx.beginPath(); ctx.ellipse(0, 2, 13, 4.5, 0, 0, Math.PI * 2); ctx.fill();
     // halo pour soi
-    if (self) { const p = paletteFor(e, self); ctx.fillStyle = "rgba(120,220,150,.14)"; circ(0, -2, 22); ctx.fill(); }
+    if (self) { ctx.fillStyle = "rgba(120,220,150,.14)"; circ(0, -14, 22); ctx.fill(); }
     ctx.save();
     ctx.scale(e.face || 1, 1);
-    ctx.translate(0, moving ? -Math.abs(phase) * 2 : 0);
+    // le sprite est dessiné debout : ses pieds reposent sur le point au sol.
+    ctx.translate(0, -14 + (moving ? -Math.abs(phase) * 2 : 0));
     if (e.mob) mobSprite(S.tier || "green", phase);
     else heroSprite(paletteFor(e, self), phase);
     ctx.restore();
     ctx.restore();
-    // barre de vie + nom (non déformés)
+    // barre de vie + nom, placés au-dessus de la tête du sprite (debout).
+    const top = s.y - 42 * ds;
     if (e.max_hp) {
-      const w = 30, hpw = w * Math.max(0, e.hp / e.max_hp), by = s.y - 26;
-      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(s.x - w / 2 - 1, by - 1, w + 2, 5);
-      ctx.fillStyle = e.mob ? "#ff5d6c" : self ? "#3ecf8e" : "#5fb0ff"; ctx.fillRect(s.x - w / 2, by, hpw, 3);
+      const w = 30, hpw = w * Math.max(0, e.hp / e.max_hp);
+      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(s.x - w / 2 - 1, top - 1, w + 2, 5);
+      ctx.fillStyle = e.mob ? "#ff5d6c" : self ? "#3ecf8e" : "#5fb0ff"; ctx.fillRect(s.x - w / 2, top, hpw, 3);
     }
     ctx.fillStyle = self ? "#eafff0" : css("--txt"); ctx.font = (self ? "bold " : "") + "11px system-ui"; ctx.textAlign = "center";
-    ctx.fillText(e.name + (self ? " (toi)" : ""), s.x, s.y + 32);
+    ctx.fillText(e.name + (self ? " (toi)" : ""), s.x, top - 6);
+  }
+
+  // Portail / barrière : arche debout sur le sol (billboard 2.5D).
+  function drawPortal(s, pt, ds) {
+    const barrier = pt.kind === "barrier", col = barrier ? "#ff5d6c" : "#6ee7ff";
+    ctx.save(); ctx.translate(s.x, s.y); ctx.scale(ds, ds);
+    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(0, 0, 16, 5, 0, 0, Math.PI * 2); ctx.fill();
+    const arch = () => { ctx.beginPath(); ctx.moveTo(-12, 0); ctx.lineTo(-12, -22); ctx.arc(0, -22, 12, Math.PI, 0); ctx.lineTo(12, 0); };
+    ctx.globalAlpha = .22; ctx.fillStyle = col; arch(); ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = .95; ctx.strokeStyle = col; ctx.lineWidth = 4; ctx.lineJoin = "round"; arch(); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.restore();
+    ctx.fillStyle = css("--muted"); ctx.font = "11px system-ui"; ctx.textAlign = "center";
+    ctx.fillText((barrier ? "⛔ " : "🚪 ") + pt.to_zone, s.x, s.y - 42 * ds);
+  }
+
+  // Objet au sol : gemme dorée flottante avec halo (billboard 2.5D).
+  function drawGroundItem(s, it, ds, now) {
+    const bob = Math.sin(now / 300 + s.x) * 2;
+    ctx.save(); ctx.translate(s.x, s.y); ctx.scale(ds, ds);
+    ctx.fillStyle = "rgba(0,0,0,.3)"; ctx.beginPath(); ctx.ellipse(0, 0, 7, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.translate(0, -9 + bob);
+    ctx.fillStyle = css("--gold"); ctx.shadowColor = css("--gold"); ctx.shadowBlur = 9;
+    ctx.beginPath(); ctx.moveTo(0, -7); ctx.lineTo(6, 0); ctx.lineTo(0, 7); ctx.lineTo(-6, 0); ctx.closePath(); ctx.fill();
+    ctx.shadowBlur = 0; ctx.restore();
+    ctx.fillStyle = css("--gold"); ctx.font = "10px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(it.name, s.x, s.y - 22 * ds);
   }
 
   // Héros chibi : grosse tête, tunique colorée par l'élément, épée.
