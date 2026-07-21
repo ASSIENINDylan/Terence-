@@ -290,7 +290,7 @@
 
   function onDelta(d) {
     (d.joined || []).forEach(e => S.entities.set(e.character_id, e));
-    (d.moved || []).forEach(m => { const e = S.entities.get(m.character_id); if (e) { e.x = m.x; e.y = m.y; } });
+    (d.moved || []).forEach(m => { const e = S.entities.get(m.character_id); if (e) { if (m.x !== e.x) e.face = m.x > e.x ? 1 : -1; e.x = m.x; e.y = m.y; } });
     (d.left || []).forEach(id => S.entities.delete(id));
     (d.items_ground || []).forEach(g => S.ground.set(g.item_id, g));
     (d.items_taken || []).forEach(id => S.ground.delete(id));
@@ -551,24 +551,123 @@
       ctx.fillStyle = css("--gold"); ctx.font = "10px system-ui"; ctx.textAlign = "center"; ctx.fillText(it.name, s.x, s.y + 18);
     });
 
-    // entités (position lissée rx, ry)
-    S.entities.forEach(e => {
-      const s = toS(e.rx, e.ry); const self = e.character_id === S.self;
-      const col = e.mob ? css("--mob") : self ? css("--ok") : factionCol(e.faction_id);
-      ctx.beginPath(); ctx.arc(s.x, s.y, self ? 11 : 9, 0, Math.PI * 2); ctx.fillStyle = col; ctx.fill();
-      if (self) { ctx.lineWidth = 3; ctx.strokeStyle = "#fff"; ctx.stroke(); }
-      // barre de vie
-      if (e.max_hp) { const w = 26, hpw = w * Math.max(0, e.hp / e.max_hp);
-        ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(s.x - w / 2, s.y - (self ? 22 : 20), w, 4);
-        ctx.fillStyle = e.mob ? css("--mob") : css("--ok"); ctx.fillRect(s.x - w / 2, s.y - (self ? 22 : 20), hpw, 4);
-      }
-      ctx.fillStyle = css("--txt"); ctx.font = (self ? "bold " : "") + "11px system-ui"; ctx.textAlign = "center";
-      ctx.fillText((e.mob ? "👹 " : "") + e.name + (self ? " (toi)" : ""), s.x, s.y + (self ? 26 : 24));
+    // entités : mobs d'abord (dessous), héros au-dessus, soi en dernier.
+    const list = [...S.entities.values()].sort((a, b) => {
+      const ka = a.character_id === S.self ? 2 : a.mob ? 0 : 1;
+      const kb = b.character_id === S.self ? 2 : b.mob ? 0 : 1;
+      return ka - kb || (a.ry < b.ry ? 1 : -1);
     });
+    list.forEach(e => drawEntity(e, toS(e.rx, e.ry), e.character_id === S.self, now));
 
     updateContext();
   }
   function factionCol(id) { return id === 2 ? css("--eau") : id === 3 ? css("--terre") : id === 1 ? css("--feu") : css("--accent"); }
+
+  // ══════════ Sprites dessinés (style chibi RPG, art original) ══════════
+  function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  function circ(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+
+  const ELEM = {
+    feu:   { cloak: "#e0492e", trim: "#ffb04a", skin: "#f0c49a", hair: "#3a2418", glow: "#ff7a3a" },
+    eau:   { cloak: "#2f6bd6", trim: "#8fe3ff", skin: "#f0c49a", hair: "#24344d", glow: "#5fb0ff" },
+    terre: { cloak: "#3f9d4c", trim: "#cbf08a", skin: "#f0c49a", hair: "#2c3b22", glow: "#8fd66a" },
+  };
+  const MOBP = {
+    green:  { body: "#7cbf4a", dark: "#4f8a2c", belly: "#c7e89a", eye: "#ffe14a", horn: "#eafcd4" },
+    orange: { body: "#d9843a", dark: "#a3541e", belly: "#f2c48a", eye: "#fff04a", horn: "#ffe0b0" },
+    red:    { body: "#b23a3a", dark: "#7a2020", belly: "#e08a7a", eye: "#ffd24a", horn: "#241010" },
+  };
+
+  function paletteFor(e, self) {
+    const el = self && S.char ? S.char.element : ({ 1: "feu", 2: "eau", 3: "terre" }[e.faction_id] || "feu");
+    return ELEM[el] || ELEM.feu;
+  }
+
+  function drawEntity(e, s, self, now) {
+    const moving = Math.hypot(e.x - e.rx, e.y - e.ry) > 0.4;
+    const phase = moving ? Math.sin(now / 85) : Math.sin(now / 650) * 0.25;
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    // ombre au sol
+    ctx.fillStyle = "rgba(0,0,0,.35)"; ctx.beginPath(); ctx.ellipse(0, 16, 12, 4, 0, 0, Math.PI * 2); ctx.fill();
+    // halo pour soi
+    if (self) { const p = paletteFor(e, self); ctx.fillStyle = "rgba(120,220,150,.14)"; circ(0, -2, 22); ctx.fill(); }
+    ctx.save();
+    ctx.scale(e.face || 1, 1);
+    ctx.translate(0, moving ? -Math.abs(phase) * 2 : 0);
+    if (e.mob) mobSprite(S.tier || "green", phase);
+    else heroSprite(paletteFor(e, self), phase);
+    ctx.restore();
+    ctx.restore();
+    // barre de vie + nom (non déformés)
+    if (e.max_hp) {
+      const w = 30, hpw = w * Math.max(0, e.hp / e.max_hp), by = s.y - 26;
+      ctx.fillStyle = "rgba(0,0,0,.55)"; ctx.fillRect(s.x - w / 2 - 1, by - 1, w + 2, 5);
+      ctx.fillStyle = e.mob ? "#ff5d6c" : self ? "#3ecf8e" : "#5fb0ff"; ctx.fillRect(s.x - w / 2, by, hpw, 3);
+    }
+    ctx.fillStyle = self ? "#eafff0" : css("--txt"); ctx.font = (self ? "bold " : "") + "11px system-ui"; ctx.textAlign = "center";
+    ctx.fillText(e.name + (self ? " (toi)" : ""), s.x, s.y + 32);
+  }
+
+  // Héros chibi : grosse tête, tunique colorée par l'élément, épée.
+  function heroSprite(p, ph) {
+    const sw = ph * 3;
+    // jambes + bottes
+    ctx.fillStyle = "#2a2f3e"; rr(-6, 5, 4.5, 9 + sw, 2); ctx.fill(); rr(1.5, 5, 4.5, 9 - sw, 2); ctx.fill();
+    ctx.fillStyle = p.trim; rr(-6.5, 12 + sw, 5.5, 3, 1.5); ctx.fill(); rr(1, 12 - sw, 5.5, 3, 1.5); ctx.fill();
+    // bras arrière
+    ctx.strokeStyle = p.skin; ctx.lineWidth = 4; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-6, -3); ctx.lineTo(-10, 3 - sw * 0.4); ctx.stroke();
+    // torse (tunique) + ceinture
+    ctx.fillStyle = p.cloak; rr(-8, -7, 16, 13, 5); ctx.fill();
+    ctx.fillStyle = p.trim; ctx.fillRect(-8, 3, 16, 2);
+    ctx.fillStyle = "rgba(255,255,255,.12)"; rr(-8, -7, 5, 13, 5); ctx.fill();
+    // bras avant + épée
+    ctx.strokeStyle = p.skin; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(6, -3); ctx.lineTo(11, 3 + sw * 0.4); ctx.stroke();
+    ctx.strokeStyle = "#dfe7f5"; ctx.lineWidth = 3; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(11, 4); ctx.lineTo(16, -10); ctx.stroke();
+    ctx.fillStyle = p.trim; ctx.fillRect(8.5, 2.5, 6, 2.2);
+    // tête
+    ctx.fillStyle = p.skin; circ(0, -14, 8); ctx.fill();
+    // cheveux (calotte)
+    ctx.fillStyle = p.hair; ctx.beginPath(); ctx.arc(0, -14, 8, Math.PI * 1.02, Math.PI * 2 - 0.06); ctx.fill();
+    ctx.fillRect(-8, -15, 16, -3);
+    // yeux + sourire
+    ctx.fillStyle = "#1a2030"; circ(-3, -13, 1.5); ctx.fill(); circ(3, -13, 1.5); ctx.fill();
+    ctx.strokeStyle = "#b5644a"; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(0, -11, 2.4, 0.2, Math.PI - 0.2); ctx.stroke();
+  }
+
+  // Monstre chibi selon le palier : lutin (vert), maraudeur (orange), damné (rouge).
+  function mobSprite(tier, ph) {
+    const p = MOBP[tier] || MOBP.green; const sw = ph * 2;
+    // pieds
+    ctx.fillStyle = p.dark; rr(-6, 10, 5, 5 + sw, 2); ctx.fill(); rr(1, 10, 5, 5 - sw, 2); ctx.fill();
+    // corps (poire) + ventre
+    ctx.fillStyle = p.body; ctx.beginPath(); ctx.ellipse(0, 2, 11, 12, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = p.belly; ctx.beginPath(); ctx.ellipse(0, 5, 6, 7, 0, 0, Math.PI * 2); ctx.fill();
+    // bras griffus
+    ctx.strokeStyle = p.body; ctx.lineWidth = 4.5; ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(-9, -1); ctx.lineTo(-13, 6 + sw); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(9, -1); ctx.lineTo(13, 6 - sw); ctx.stroke();
+    // tête
+    ctx.fillStyle = p.body; circ(0, -9, 9); ctx.fill();
+    if (tier === "red") { // cornes de démon
+      ctx.fillStyle = p.horn === "#241010" ? "#e8e0d0" : p.horn;
+      ctx.beginPath(); ctx.moveTo(-7, -14); ctx.lineTo(-11, -22); ctx.lineTo(-4, -15); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(7, -14); ctx.lineTo(11, -22); ctx.lineTo(4, -15); ctx.fill();
+    } else { // oreilles pointues
+      ctx.fillStyle = p.body;
+      ctx.beginPath(); ctx.moveTo(-8, -11); ctx.lineTo(-14, -16); ctx.lineTo(-6, -6); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(8, -11); ctx.lineTo(14, -16); ctx.lineTo(6, -6); ctx.fill();
+    }
+    // yeux brillants
+    ctx.fillStyle = p.eye; circ(-3.4, -9, 2.4); ctx.fill(); circ(3.4, -9, 2.4); ctx.fill();
+    ctx.fillStyle = "#1a1010"; circ(-3.4, -9, 1); ctx.fill(); circ(3.4, -9, 1); ctx.fill();
+    // crocs
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.moveTo(-3, -4); ctx.lineTo(-1.5, -1); ctx.lineTo(-0.5, -4); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(3, -4); ctx.lineTo(1.5, -1); ctx.lineTo(0.5, -4); ctx.fill();
+  }
 
   requestAnimationFrame(draw);
   log("Bienvenue. Connecte-toi pour entrer dans le monde.");
