@@ -1,53 +1,95 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Shadow of the Warrior</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body {
-    height: 100%;
-    background: #05060a;
-    color: #e8e2d4;
-    font-family: "Trebuchet MS", Georgia, serif;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    overflow: hidden;
-  }
-  #game-wrap {
-    position: relative; width: 900px; height: 640px;
-    border-radius: 4px;
-    box-shadow: 0 14px 70px rgba(0,0,0,0.95), 0 0 0 2px #17130c, 0 0 0 4px #3a2f1c, 0 0 0 5px #0a0805;
-  }
-  #pixi, #map2d {
-    position: absolute; top: 0; left: 0; width: 900px; height: 640px;
-    border-radius: 3px;
-  }
-  #pixi { z-index: 1; background: #05060a; }
-  #map2d { z-index: 2; }
-  #hint {
-    margin-top: 12px; font-size: 12.5px; color: #7a6f58; letter-spacing: 1px;
-    text-align: center; font-family: "Segoe UI", Arial, sans-serif;
-  }
-  #hint b { color: #c8a24a; }
-  #loading {
-    position:absolute; inset:0; z-index:5; display:flex; align-items:center; justify-content:center;
-    background:#05060a; color:#8a7a54; font-size:15px; letter-spacing:2px;
-  }
-</style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shinobi no Yuukan — jeu de ninja par navigateur</title>
+  <link rel="stylesheet" href="css/style.css" />
 </head>
 <body>
-  <div id="game-wrap">
-    <canvas id="pixi" width="900" height="640"></canvas>
-    <canvas id="map2d" width="900" height="640"></canvas>
-    <div id="loading">Invocation des ténèbres…</div>
-  </div>
-  <div id="hint">
-    Déplacement <b>Z Q S D</b> · Interagir <b>E</b> · Combat <b>1-4</b> / <b>↑↓ E</b> · Boutique <b>↑↓ E</b>, <b>X</b>
+  <div id="app">
+    <!-- Écran titre / création de personnage -->
+    <section id="title-screen" class="screen">
+      <div class="title-box">
+        <h1>忍 &nbsp;Shinobi no Yuukan</h1>
+        <p class="subtitle">Deviens le plus grand shinobi du pays de Yuukan.</p>
+
+        <div id="new-game-panel">
+          <label class="field">
+            <span>Nom du ninja</span>
+            <input id="hero-name" type="text" maxlength="14" placeholder="ex. Kaito" />
+          </label>
+
+          <p class="field-label">Choisis ton village caché</p>
+          <div id="village-choice" class="village-choice"></div>
+
+          <div class="title-actions">
+            <button id="btn-start" class="btn btn-primary">Commencer l'aventure</button>
+            <button id="btn-continue" class="btn">Continuer</button>
+          </div>
+          <p id="title-hint" class="hint"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Écran de jeu (carte) -->
+    <section id="game-screen" class="screen hidden">
+      <div class="game-layout">
+        <div class="viewport-wrap">
+          <canvas id="view" width="832" height="544"></canvas>
+          <div id="toast" class="toast hidden"></div>
+        </div>
+
+        <aside id="sidebar">
+          <div class="hud-name">
+            <span id="hud-hero">—</span>
+            <span id="hud-village" class="hud-village">—</span>
+          </div>
+          <div class="hud-level">Niveau <b id="hud-level">1</b> · <span id="hud-rank">Genin</span></div>
+
+          <div class="bar"><span class="bar-label">PV</span>
+            <div class="bar-track"><div id="bar-hp" class="bar-fill hp"></div><span id="txt-hp" class="bar-text"></span></div>
+          </div>
+          <div class="bar"><span class="bar-label">Chakra</span>
+            <div class="bar-track"><div id="bar-ck" class="bar-fill ck"></div><span id="txt-ck" class="bar-text"></span></div>
+          </div>
+          <div class="bar"><span class="bar-label">Exp</span>
+            <div class="bar-track"><div id="bar-xp" class="bar-fill xp"></div><span id="txt-xp" class="bar-text"></span></div>
+          </div>
+
+          <ul class="stats">
+            <li>Taijutsu <b id="st-tai">0</b></li>
+            <li>Ninjutsu <b id="st-nin">0</b></li>
+            <li>Genjutsu <b id="st-gen">0</b></li>
+            <li>Vitesse <b id="st-spd">0</b></li>
+            <li>Ryō <b id="st-ryo">0</b> ₽</li>
+            <li>Points <b id="st-pts">0</b></li>
+          </ul>
+
+          <div id="loc-info" class="loc-info">—</div>
+
+          <div class="side-actions">
+            <button id="btn-menu" class="btn btn-small">Menu du village (E)</button>
+            <button id="btn-char" class="btn btn-small">Ninja &amp; jutsus (C)</button>
+            <button id="btn-save" class="btn btn-small">Sauvegarder</button>
+          </div>
+          <p class="controls-hint">Déplacement : Z Q S D / flèches · Courir : Maj</p>
+        </aside>
+      </div>
+    </section>
+
+    <!-- Couche des fenêtres modales (village, combat, fiche perso) -->
+    <div id="overlay" class="overlay hidden"></div>
   </div>
 
-  <script src="libs/pixi.min.js"></script>
-  <script src="libs/pixi-filters.js"></script>
-  <script src="game.js"></script>
+  <!-- Scripts classiques (aucun bundler) : ordre = dépendances -->
+  <script src="js/rng.js"></script>
+  <script src="js/data.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/combat.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/game.js"></script>
 </body>
 </html>

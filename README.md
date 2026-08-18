@@ -1,94 +1,115 @@
-# Shadow of the Warrior
+# 忍 Shinobi no Yuukan
 
-Un action-RPG au tour par tour à l'ambiance gothique. Le **combat est rendu en
-WebGL via PixiJS** (pénombre, halos de torche, ombres portées, brouillard,
-étalonnage sombre et **giclées de sang**) pour évoquer *Darkest Dungeon* ; la
-carte-hub et les menus sont rendus sur un canvas 2D. Tous les personnages sont
-**peints procéduralement** (couches d'ombrage, contour-lumière) — aucune image
-externe, tout est embarqué (PixiJS est vendorisé dans `libs/`), donc le jeu
-tourne hors-ligne.
+Un **jeu de ninja par navigateur** inspiré de [shinobi.fr](https://www.shinobi.net/) :
+on incarne un shinobi de l'un des **villages cachés** du pays de **Yuukan**, on
+**explore la carte**, on améliore ses caractéristiques (**taijutsu, ninjutsu,
+genjutsu**), on **apprend des jutsus**, on **équipe** son ninja, on prend des
+**missions** et on combat au **tour par tour**.
 
-## Trois façons de jouer
+Le jeu reprend la **dynamique de déplacement** clé de shinobi.fr : on se déplace
+de zone en zone sur la carte, **chaque pas consomme du chakra** (qui régénère au
+repos), et **s'aventurer dans les zones sauvages déclenche des rencontres**.
 
-1. **Dans le navigateur** : ouvre `index.html` (sert `game.js` + `libs/`).
-2. **En application de bureau** : `npm install` puis `npm start` (Electron).
-3. **En application Windows** : voir plus bas.
+Tout est **100 % local, sans dépendance et sans build** : peinture procédurale
+sur `<canvas>`, aucune image ni bibliothèque externe. Il suffit d'ouvrir le
+fichier `index.html`.
 
-## Comment jouer
+## Jouer
 
-- **Choix de classe** : `← →` puis `E`
-- **Déplacement sur la carte** : `Z Q S D` / flèches · **Interagir** : `E`
-- **En combat** : `1` Attaquer · `2` Capacité · `3` Potion · `4` Fuir (ou `↑↓ E`)
-- **En boutique** : `↑ ↓` choisir, `E` acheter, `X` sortir
+Double-cliquez sur **`index.html`** (ou glissez-le dans un navigateur). Aucune
+installation, aucun serveur.
 
-## Les Cinq Portails
+- **Se déplacer** : `Z Q S D` (ou `W A S D`) / flèches
+- **Courir** : `Maj` (plus rapide, mais consomme plus de chakra)
+- **Entrer dans un village** : `E` (ou `Espace`) quand on est dessus
+- **Fiche du ninja & jutsus** : `C`
+- **Sauvegarder** : bouton *Sauvegarder* (la partie est aussi sauvegardée
+  automatiquement après chaque combat, achat, montée de niveau…)
 
-La carte-hub donne accès à **5 portails**, chacun de **10 étages** terminés par
-un **boss unique**. La difficulté augmente avec le portail, l'étage et votre
-niveau. Un portail se déverrouille en atteignant son niveau recommandé ou en
-purifiant le précédent.
+La progression est stockée dans le navigateur (`localStorage`) — le bouton
+**Continuer** de l'écran-titre reprend la dernière partie.
 
-| Portail | Niv. | Gardien (boss) |
-|---|---|---|
-| Les Catacombes | 1 | Le Croque-Os |
-| La Forêt Maudite | 6 | La Sylve Affamée |
-| Le Sanctuaire Brisé | 11 | L'Inquisiteur Déchu |
-| Les Abysses Gelés | 16 | Le Roi Gelé |
-| Le Trône de Cendres | 22 | Malphas, l'Embrasé |
+## Le pays de Yuukan
 
-Entre deux étages, un **feu de camp** permet de se soigner un peu et de
-continuer, ou de se replier au village (en gardant or et niveaux).
+La carte est **générée** (reproductible via une graine) : plaines, forêts,
+montagnes, désert, lacs et **routes** qui relient les villages. On y trouve les
+**trois villages cachés** — et un **quatrième, secret**, à découvrir en explorant.
 
-## Classes uniques (3 → 9 évolutions)
-
-Chaque classe a des **stats de base**, une **capacité active**, un **passif
-unique** et une apparence propre. Au **niveau 5**, elle évolue en l'une de
-**3 classes avancées** (bonus de stats + nouveau passif + nouvelle capacité).
-
-| Classe | Passif | Capacité | Évolutions |
+| Village | Kanji | Spécialité | Style |
 |---|---|---|---|
-| **Guerrier** | Peau de fer (−20% dégâts subis) | Colère du Titan | Berserker · Paladin · Seigneur de Guerre |
-| **Lame des Ombres** | Célérité (chance de rejouer) | Danse des Ombres | Maître des Ombres · Duelliste · Traqueur |
-| **Mage de Guerre** | Flux mystique (+énergie/tour) | Trait de Feu | Archimage · Nécromancien · Sage |
+| **Chikara** | 力 | Taijutsu | Le corps à corps, la Force |
+| **Mahou** | 魔 | Ninjutsu | Les sceaux et les éléments |
+| **Gensou** | 幻 | Genjutsu | L'illusion, briser l'esprit |
+| *Yami* | 闇 | *secret* | *le village de l'Ombre, caché* |
 
-## Effets spéciaux des statistiques
+## Dynamique de déplacement (le cœur du jeu)
 
-| Stat | Effets |
-|---|---|
-| **Force** | + armure (`FOR × 0.6`) et + dégâts (`FOR × 0.55`) |
-| **Vitesse** | + esquive (`VIT × 2.2 %`, max 72) · **double frappe** (`VIT × 1.2 %`) · + fuite |
-| **Esprit** | + puissance magique · + énergie max & régénération · soin après victoire |
+- Le monde est une **grille de zones**. On avance case par case ; le rendu
+  interpole pour une marche fluide, la caméra suit le ninja.
+- **Chaque pas coûte du chakra**, selon le terrain : route `1`, plaine `2`,
+  forêt `3`, désert `4`, montagne `5`. Les villages sont gratuits.
+- Le **chakra régénère** — vite à l'arrêt, lentement en marchant. À sec, on ne
+  peut plus traverser les terrains coûteux : il faut se **reposer** (au village
+  ou en revenant sur une route).
+- **L'eau est infranchissable** ; les **routes** sont sûres et rapides.
+- Marcher dans une **zone sauvage** a une chance de déclencher une **rencontre**
+  qui bascule en combat. Une brève **immunité** suit chaque combat.
 
-## Marchands qui évoluent
+## Combat au tour par tour
 
-Le **forgeron** (armes/armures) et l'**apothicaire** (potions/élixirs)
-**enrichissent leur stock à mesure que le héros monte en niveau** : de
-nouveaux paliers d'équipement apparaissent, et les potions soignent davantage.
+L'ordre de départ dépend de la **vitesse**. À votre tour :
 
-## Obtenir l'application Windows
+- **Taijutsu** — attaque de base, gratuite, gouvernée par le Taijutsu.
+- **Jutsu** — puise dans le **chakra**, gouverné par la stat associée
+  (nin/gen/tai). Effets : dégâts, **soin**, **paralysie**, baisse de défense
+  ennemie, boost de vitesse.
+- **Objet** — potions de soin / pilules de chakra.
+- **Fuir** — réussite selon la vitesse ; échouer coûte le tour.
 
-L'application est compilée automatiquement par GitHub Actions à chaque push,
-sous forme d'un **`.zip` contenant l'application décompressée** (et non un exe
-auto-extractible, qui déclenche souvent une fausse alerte antivirus) :
+Victoire ⇒ **XP + ryō** (+ butin éventuel) et progression de mission. Défaite ⇒
+réveil à votre village, un peu de ryō en moins.
 
-1. Onglet **Actions** du dépôt → dernier run **« Build Windows .exe »** vert.
-2. Télécharger l'artefact **`ShadowOfTheWarrior-Windows`**.
-3. Dézipper le dossier `ShadowOfTheWarrior-3.0.0-win64.zip`.
-4. Ouvrir le dossier et double-cliquer sur **`Shadow of the Warrior.exe`**
-   (`F11` = plein écran).
+## Progression
 
-Ou compiler soi-même sous Windows : `npm install && npm run dist:win`.
-Pousser un tag `v2.0.0` publie aussi le `.zip` dans une **Release** GitHub.
+- **XP → niveau** : chaque niveau augmente PV et chakra max, remet en forme, et
+  donne **3 points de caractéristique** à répartir (Taijutsu / Ninjutsu /
+  Genjutsu / Vitesse) au **dojo d'entraînement** du village.
+- **Grades** selon le niveau : Genin → Chunin → Jonin → Anbu → Kage.
+- **Boutique** : armes (+taijutsu), armures (+PV/défense), bandeaux (+chakra),
+  et consommables. Les objets ont un **niveau requis**.
+- **Jutsus** : chaque village enseigne son propre répertoire, appris contre des
+  ryō (niveau requis selon la puissance).
+- **Missions** : contrats de chasse (rangs D → B) pour votre village, récompensés
+  en XP et ryō.
 
-### En cas d'alerte antivirus (faux positif)
+## Menus du village (touche `E`)
 
-L'application n'est pas signée numériquement (un certificat de signature de code
-coûte cher), donc Windows SmartScreen ou un antivirus peut afficher un
-avertissement. Le jeu est 100 % local (aucun accès réseau) — c'est un faux
-positif dû à l'absence de signature. Solutions :
+Sur une tuile de village, `E` ouvre le hub : **Repos** (soin complet),
+**Entraînement** (répartir les points), **Boutique**, **Jutsus** et **Missions**.
 
-- **SmartScreen** : « Informations complémentaires » → « Exécuter quand même ».
-- **Windows Defender** : *Sécurité Windows → Protection contre les virus →
-  Gérer les paramètres → Exclusions* → ajouter le dossier du jeu.
-- **Test immédiat sans exe** : ouvre simplement `index.html` dans un navigateur,
-  le jeu est identique et ne peut être bloqué par aucun antivirus.
+## Structure du code
+
+Aucun bundler : des scripts classiques partageant l'espace de noms global `SH`,
+chargés dans l'ordre des dépendances par `index.html`.
+
+```
+index.html          # page + HUD + ordre de chargement des scripts
+css/style.css       # thème sombre, HUD, fenêtres modales, combat
+js/
+  rng.js            # générateur pseudo-aléatoire déterministe (mulberry32)
+  data.js           # contenu : villages, jutsus, monstres, objets, terrains, missions
+  world.js          # génération de la carte du pays de Yuukan
+  state.js          # état du joueur : stats dérivées, XP, inventaire, sauvegarde
+  combat.js         # moteur de combat au tour par tour
+  ui.js             # HUD, menus de village, fiche perso, fenêtre de combat
+  render.js         # rendu canvas (carte + sprites procéduraux)
+  game.js           # boucle de jeu, déplacement/chakra, rencontres, entrées
+```
+
+## Développement
+
+Le jeu n'a **aucune dépendance d'exécution**. Pour vérifier la logique hors
+navigateur (génération de carte, combat, progression, sauvegarde), un harnais de
+test Node stubbe `window`/`localStorage` et charge les modules non-DOM — voir
+l'historique de développement. La syntaxe de chaque fichier se vérifie avec
+`node --check js/<fichier>.js`.
