@@ -53,9 +53,11 @@ montagnes, désert, lacs et **routes** qui relient les villages. On y trouve les
   (`localStorage`) — le mot de passe n'est que haché, ce n'est pas une sécurité
   réseau, juste un profil par joueur sur le navigateur.
 - À l'**inscription**, on choisit **nom**, **apparence** et **village**.
-- L'**apparence** (peau, tenue, cheveux, bandeau) se personnalise à la création
-  et se **modifie à tout moment** depuis la fiche du ninja (`C` → *Apparence*).
-  Elle est reflétée sur la carte et en combat.
+- L'**apparence** est un **portrait de face personnalisable** : forme du
+  **visage**, **peau**, **coiffure** et **couleur de cheveux**, **yeux** et
+  **couleur des yeux**, **nez**, **bouche**, **bandeau** et **tenue**. Elle se
+  personnalise à la création et se **modifie à tout moment** depuis la fiche du
+  ninja (`C` → *Apparence*), et se reflète sur la carte et en combat.
 
 ## Dynamique de déplacement (le cœur du jeu)
 

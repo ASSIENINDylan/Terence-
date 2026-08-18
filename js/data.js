@@ -147,21 +147,37 @@
    * palettes (facile à faire défiler dans l'éditeur) ; render.js les convertit
    * en couleurs concrètes.
    * -------------------------------------------------------------------- */
+  // Chaque trait est soit une COULEUR (palette à faire défiler), soit un STYLE
+  // (forme dessinée par render.js, avec un nom lisible). L'apparence stocke des
+  // index. L'ordre ci-dessous est aussi l'ordre affiché dans l'éditeur.
   const APPEARANCE = {
-    skin:    { label: "Peau",    colors: ["#f0c9a4", "#e0b184", "#c98d5f", "#a5673f", "#7a4a2b", "#4e3220"] },
-    outfit:  { label: "Tenue",   colors: ["#20242e", "#2b3040", "#39304a", "#123a2e", "#4a1f22", "#1f3a4a", "#3a3320", "#5a5f6b"] },
-    hair:    { label: "Cheveux", colors: ["#141414", "#3a2a17", "#6b4a2a", "#9a9a9a", "#c0392b", "#2a4a6b", "#d9c27a"] },
-    band:    { label: "Bandeau", colors: ["#e0553b", "#4aa3ff", "#c79bff", "#f0c04a", "#4bd07a", "#e6e6e6", "#e08a2b", "#111111"] },
+    face:      { label: "Visage",          type: "style", names: ["Ovale", "Rond", "Carré", "Anguleux", "Fin"] },
+    skin:      { label: "Peau",            type: "color", colors: ["#ffd9b0", "#f0c9a4", "#e0b184", "#c98d5f", "#a5673f", "#7a4a2b", "#4e3220", "#3a2418"] },
+    hair:      { label: "Coiffure",        type: "style", names: ["Chauve", "Court", "Hérissé", "Long", "Queue", "Afro", "Undercut", "Chignon"] },
+    hairColor: { label: "Couleur cheveux", type: "color", colors: ["#141414", "#2a1e12", "#5a3a1c", "#8a5a2a", "#b07a34", "#d9c27a", "#9a9a9a", "#e8e8e8", "#c0392b", "#2a4a6b"] },
+    eyes:      { label: "Yeux",            type: "style", names: ["Ronds", "Amande", "Perçants", "Doux", "Grands"] },
+    eyeColor:  { label: "Couleur yeux",    type: "color", colors: ["#3a2a1a", "#1a1a1a", "#3a6b8a", "#2e7d4f", "#7a4a2b", "#8a2be2", "#b0202a"] },
+    nose:      { label: "Nez",             type: "style", names: ["Petit", "Moyen", "Pointu"] },
+    mouth:     { label: "Bouche",          type: "style", names: ["Neutre", "Sourire", "Sévère", "Ouverte", "Malicieux"] },
+    band:      { label: "Bandeau",         type: "color", colors: ["#e0553b", "#4aa3ff", "#c79bff", "#f0c04a", "#4bd07a", "#e6e6e6", "#e08a2b", "#111111", "#8a2be2"] },
+    outfit:    { label: "Tenue",           type: "color", colors: ["#20242e", "#2b3040", "#39304a", "#123a2e", "#4a1f22", "#1f3a4a", "#3a3320", "#5a5f6b", "#111318"] },
   };
-  const APPEARANCE_KEYS = ["skin", "outfit", "hair", "band"];
+  const APPEARANCE_KEYS = Object.keys(APPEARANCE);
 
-  function defaultAppearance() { return { skin: 1, outfit: 0, hair: 0, band: 0 }; }
+  function isColor(key) { return APPEARANCE[key].type === "color"; }
+  function optCount(key) { const a = APPEARANCE[key]; return a.type === "color" ? a.colors.length : a.names.length; }
+  function optName(key, i) { const a = APPEARANCE[key]; return a.type === "color" ? null : a.names[i]; }
+  function colorOf(key, i) { const a = APPEARANCE[key]; return a.type === "color" ? a.colors[i] : null; }
+
+  function defaultAppearance() {
+    return { face: 0, skin: 1, hair: 1, hairColor: 0, eyes: 1, eyeColor: 0, nose: 1, mouth: 1, band: 0, outfit: 0 };
+  }
 
   // Assainit une apparence (index valides) — utile au chargement d'une sauvegarde.
   function normAppearance(a) {
     const out = defaultAppearance();
     if (a) for (const k of APPEARANCE_KEYS) {
-      const n = APPEARANCE[k].colors.length;
+      const n = optCount(k);
       if (Number.isInteger(a[k])) out[k] = ((a[k] % n) + n) % n;
     }
     return out;
@@ -176,16 +192,18 @@
     return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
   }
 
-  // Convertit une apparence (index) en couleurs concrètes pour le rendu.
+  // Convertit une apparence en couleurs concrètes (les formes restent des index).
   function appearancePalette(a) {
     a = normAppearance(a);
     const outfit = APPEARANCE.outfit.colors[a.outfit];
     return {
       skin: APPEARANCE.skin.colors[a.skin],
+      skinDark: shade(APPEARANCE.skin.colors[a.skin], 0.84),
+      hair: APPEARANCE.hairColor.colors[a.hairColor],
+      eye: APPEARANCE.eyeColor.colors[a.eyeColor],
+      band: APPEARANCE.band.colors[a.band],
       outfit,
       outfitDark: shade(outfit, 0.7),
-      hair: APPEARANCE.hair.colors[a.hair],
-      band: APPEARANCE.band.colors[a.band],
     };
   }
 
@@ -193,6 +211,7 @@
     TERR, TERR_BY_ID, VILLAGES, VILLAGE_BY_ID,
     JUTSUS, JUTSUS_LIST, MONSTERS, ITEMS, ITEMS_LIST,
     RANKS, rankForLevel, xpForLevel, MISSION_TEMPLATES,
-    APPEARANCE, APPEARANCE_KEYS, defaultAppearance, normAppearance, appearancePalette, shade,
+    APPEARANCE, APPEARANCE_KEYS, isColor, optCount, optName, colorOf,
+    defaultAppearance, normAppearance, appearancePalette, shade,
   };
 })(window);

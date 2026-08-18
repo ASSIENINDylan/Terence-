@@ -262,6 +262,7 @@
     const modal = openModal(
       '<button class="btn btn-small modal-close" data-close>Fermer ✕</button>' +
       '<button class="btn btn-small modal-close" data-appearance style="margin-right:8px">Apparence</button>' +
+      '<canvas class="char-portrait" width="96" height="118"></canvas>' +
       "<h2>" + esc(p.name) + "</h2>" +
       '<p class="modal-sub">' + v.kanji + " " + v.name + " · " + data.rankForLevel(p.level) + " · niveau " + p.level + "</p>" +
       '<div class="list" style="margin-bottom:14px">' +
@@ -272,6 +273,7 @@
       '<h3 style="margin-top:14px">Sac</h3><div class="list">' + invRows + "</div>" +
       '<h3 style="margin-top:14px">Jutsus</h3><div class="list">' + jutsuRows + "</div>"
     );
+    SH.render.drawPortrait(modal.querySelector(".char-portrait"), p.appearance);
     modal.querySelector("[data-close]").onclick = closeOverlay;
     modal.querySelector("[data-appearance]").onclick = () => openAppearance(p, world, () => openCharacter(p, world));
     modal.querySelectorAll("[data-use]").forEach((b) => {
@@ -316,24 +318,26 @@
     const keys = data.APPEARANCE_KEYS;
     container.innerHTML =
       '<div class="appearance">' +
-      '<canvas class="app-preview" width="108" height="138"></canvas>' +
+      '<canvas class="app-preview" width="132" height="164"></canvas>' +
       '<div class="app-controls">' +
-      keys.map((k) =>
-        '<div class="app-row" data-key="' + k + '"><span>' + data.APPEARANCE[k].label + "</span>" +
-        '<div class="app-pick"><button data-dir="-1">‹</button>' +
-        '<span class="app-swatch"></span><button data-dir="1">›</button></div></div>'
-      ).join("") + "</div></div>";
+      keys.map((k) => {
+        const val = data.isColor(k) ? '<span class="app-swatch"></span>' : '<span class="app-name"></span>';
+        return '<div class="app-row" data-key="' + k + '"><span>' + data.APPEARANCE[k].label + "</span>" +
+          '<div class="app-pick"><button data-dir="-1" aria-label="précédent">‹</button>' +
+          val + '<button data-dir="1" aria-label="suivant">›</button></div></div>';
+      }).join("") + "</div></div>";
 
     const preview = container.querySelector(".app-preview");
     function redraw() {
-      SH.render.drawNinjaSprite(preview, appearance, "right");
+      SH.render.drawPortrait(preview, appearance);
       keys.forEach((k) => {
-        container.querySelector('.app-row[data-key="' + k + '"] .app-swatch').style.background =
-          data.APPEARANCE[k].colors[appearance[k]];
+        const row = container.querySelector('.app-row[data-key="' + k + '"]');
+        if (data.isColor(k)) row.querySelector(".app-swatch").style.background = data.colorOf(k, appearance[k]);
+        else row.querySelector(".app-name").textContent = data.optName(k, appearance[k]);
       });
     }
     container.querySelectorAll(".app-row").forEach((row) => {
-      const k = row.dataset.key, n = data.APPEARANCE[k].colors.length;
+      const k = row.dataset.key, n = data.optCount(k);
       row.querySelectorAll("button").forEach((b) => {
         b.onclick = () => {
           appearance[k] = (appearance[k] + (+b.dataset.dir) + n) % n;
