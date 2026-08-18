@@ -29,21 +29,21 @@
    * -------------------------------------------------------------------- */
   const VILLAGES = [
     {
-      id: "chikara", name: "Chikara", kanji: "力", color: "#e0553b",
+      id: "zambakro", name: "Zambakro", kanji: "力", color: "#e0553b",
       spec: "tai", specName: "Taijutsu",
       blurb: "Le village de la Force. Ses shinobi frappent au corps à corps.",
       start: { tai: 4, nin: 0, gen: 0 },
       teaches: ["lotus_initial", "ouragan_feuille", "danse_fauve", "clone_ombre"],
     },
     {
-      id: "mahou", name: "Mahou", kanji: "魔", color: "#4aa3ff",
+      id: "abidjan", name: "Abidjan", kanji: "魔", color: "#4aa3ff",
       spec: "nin", specName: "Ninjutsu",
-      blurb: "Le village de la Magie. Maîtres des sceaux et des éléments.",
+      blurb: "Le village des sceaux. Maîtres des éléments et des ninjutsus.",
       start: { tai: 0, nin: 4, gen: 0 },
       teaches: ["boule_feu", "dragon_eau", "eclair_pourfendeur", "soin_medical"],
     },
     {
-      id: "gensou", name: "Gensou", kanji: "幻", color: "#c79bff",
+      id: "akradjo", name: "Akradjo", kanji: "幻", color: "#c79bff",
       spec: "gen", specName: "Genjutsu",
       blurb: "Le village de l'Illusion. On y brise l'esprit avant le corps.",
       start: { tai: 0, nin: 0, gen: 4 },
@@ -142,9 +142,57 @@
     { rank: "B", type: "hunt", target: "deserteur", count: 3, xp: 240, ryo: 340, minLevel: 10, title: "Chasse aux renégats", desc: "Traquez 3 ninjas déserteurs." },
   ];
 
+  /* ----------------------------------------------------------------------
+   * Apparence personnalisable du ninja. L'apparence stocke des INDEX dans ces
+   * palettes (facile à faire défiler dans l'éditeur) ; render.js les convertit
+   * en couleurs concrètes.
+   * -------------------------------------------------------------------- */
+  const APPEARANCE = {
+    skin:    { label: "Peau",    colors: ["#f0c9a4", "#e0b184", "#c98d5f", "#a5673f", "#7a4a2b", "#4e3220"] },
+    outfit:  { label: "Tenue",   colors: ["#20242e", "#2b3040", "#39304a", "#123a2e", "#4a1f22", "#1f3a4a", "#3a3320", "#5a5f6b"] },
+    hair:    { label: "Cheveux", colors: ["#141414", "#3a2a17", "#6b4a2a", "#9a9a9a", "#c0392b", "#2a4a6b", "#d9c27a"] },
+    band:    { label: "Bandeau", colors: ["#e0553b", "#4aa3ff", "#c79bff", "#f0c04a", "#4bd07a", "#e6e6e6", "#e08a2b", "#111111"] },
+  };
+  const APPEARANCE_KEYS = ["skin", "outfit", "hair", "band"];
+
+  function defaultAppearance() { return { skin: 1, outfit: 0, hair: 0, band: 0 }; }
+
+  // Assainit une apparence (index valides) — utile au chargement d'une sauvegarde.
+  function normAppearance(a) {
+    const out = defaultAppearance();
+    if (a) for (const k of APPEARANCE_KEYS) {
+      const n = APPEARANCE[k].colors.length;
+      if (Number.isInteger(a[k])) out[k] = ((a[k] % n) + n) % n;
+    }
+    return out;
+  }
+
+  // Assombrit une couleur hex d'un facteur (0..1).
+  function shade(hex, f) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = Math.round(((n >> 16) & 255) * f);
+    const g = Math.round(((n >> 8) & 255) * f);
+    const b = Math.round((n & 255) * f);
+    return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+
+  // Convertit une apparence (index) en couleurs concrètes pour le rendu.
+  function appearancePalette(a) {
+    a = normAppearance(a);
+    const outfit = APPEARANCE.outfit.colors[a.outfit];
+    return {
+      skin: APPEARANCE.skin.colors[a.skin],
+      outfit,
+      outfitDark: shade(outfit, 0.7),
+      hair: APPEARANCE.hair.colors[a.hair],
+      band: APPEARANCE.band.colors[a.band],
+    };
+  }
+
   SH.data = {
     TERR, TERR_BY_ID, VILLAGES, VILLAGE_BY_ID,
     JUTSUS, JUTSUS_LIST, MONSTERS, ITEMS, ITEMS_LIST,
     RANKS, rankForLevel, xpForLevel, MISSION_TEMPLATES,
+    APPEARANCE, APPEARANCE_KEYS, defaultAppearance, normAppearance, appearancePalette, shade,
   };
 })(window);

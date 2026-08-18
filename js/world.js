@@ -74,9 +74,9 @@
 
     // Emplacements des 3 villages (jitter léger), + 1 village secret.
     const anchors = [
-      { def: SH.data.VILLAGE_BY_ID.chikara, fx: 0.20, fy: 0.24 },
-      { def: SH.data.VILLAGE_BY_ID.mahou,   fx: 0.78, fy: 0.22 },
-      { def: SH.data.VILLAGE_BY_ID.gensou,  fx: 0.44, fy: 0.78 },
+      { def: SH.data.VILLAGE_BY_ID.zambakro, fx: 0.20, fy: 0.24 },
+      { def: SH.data.VILLAGE_BY_ID.abidjan,  fx: 0.78, fy: 0.22 },
+      { def: SH.data.VILLAGE_BY_ID.akradjo,  fx: 0.44, fy: 0.78 },
     ];
     const villages = anchors.map((a) => {
       let cx = Math.round(a.fx * (W - 6)) + 3 + (Math.floor(rng() * 3) - 1);

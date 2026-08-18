@@ -5,10 +5,9 @@
   "use strict";
   const SH = (global.SH = global.SH || {});
   const data = SH.data;
-  const SAVE_KEY = "shinobi_yuukan_save_v1";
 
-  // Crée un héros neuf pour un village donné.
-  function createHero(name, villageId) {
+  // Crée un héros neuf pour un village donné (avec apparence personnalisée).
+  function createHero(name, villageId, appearance) {
     const v = data.VILLAGE_BY_ID[villageId];
     const base = {
       tai: 2 + (v.start.tai || 0),
@@ -19,6 +18,7 @@
     const p = {
       name: (name || "Ninja").trim().slice(0, 14) || "Ninja",
       village: villageId,
+      appearance: data.normAppearance(appearance),
       level: 1, xp: 0, statPoints: 0,
       base,
       pvMaxBase: 60, ckMaxBase: 40,
@@ -144,27 +144,75 @@
     p.ryo -= price; p.jutsus.push(jutsuId); return null;
   }
 
-  // ---- Sauvegarde ----
+  // ---- Comptes locaux (connexion / inscription) ----
+  // Stockage 100 % local (localStorage). Ce n'est pas une sécurité réseau : le
+  // mot de passe est juste haché pour ne pas être stocké en clair.
+  const ACCOUNTS_KEY = "shinobi_yuukan_accounts_v1";
+  const session = { user: null };
+
+  function hash(s) {                       // djb2 -> hex (léger, non cryptographique)
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+    return h.toString(16);
+  }
+  function accountsAll() {
+    try { return JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || "{}"); } catch (e) { return {}; }
+  }
+  function accountsPersist(obj) {
+    try { localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(obj)); return true; } catch (e) { return false; }
+  }
+  function normUser(u) { return (u || "").trim().toLowerCase(); }
+
+  function register(user, pass) {
+    const u = normUser(user);
+    if (u.length < 3) return { ok: false, error: "Identifiant : au moins 3 caractères." };
+    if ((pass || "").length < 4) return { ok: false, error: "Mot de passe : au moins 4 caractères." };
+    const all = accountsAll();
+    if (all[u]) return { ok: false, error: "Cet identifiant existe déjà." };
+    all[u] = { pass: hash(pass), display: user.trim(), hero: null, createdAt: Date.now() };
+    accountsPersist(all);
+    session.user = u;
+    return { ok: true };
+  }
+  function login(user, pass) {
+    const u = normUser(user);
+    const all = accountsAll();
+    const acc = all[u];
+    if (!acc || acc.pass !== hash(pass)) return { ok: false, error: "Identifiant ou mot de passe incorrect." };
+    session.user = u;
+    return { ok: true, hero: acc.hero };
+  }
+  function logout() { session.user = null; }
+  function currentHero() {
+    if (!session.user) return null;
+    const acc = accountsAll()[session.user];
+    return acc ? acc.hero : null;
+  }
+
+  // ---- Sauvegarde (dans le compte connecté) ----
   function save(p) {
+    if (!session.user) return false;
     try {
+      const all = accountsAll();
+      if (!all[session.user]) return false;
       p.savedAt = Date.now();
-      localStorage.setItem(SAVE_KEY, JSON.stringify(p));
-      return true;
+      all[session.user].hero = p;
+      return accountsPersist(all);
     } catch (e) { return false; }
   }
-  function hasSave() { try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; } }
-  function load() {
-    try {
-      const raw = localStorage.getItem(SAVE_KEY);
-      if (!raw) return null;
-      return JSON.parse(raw);
-    } catch (e) { return null; }
+  function load() { return currentHero(); }
+  function hasSave() { return !!currentHero(); }
+  function wipe() {                          // efface le héros du compte (repartir de zéro)
+    if (!session.user) return;
+    const all = accountsAll();
+    if (all[session.user]) { all[session.user].hero = null; accountsPersist(all); }
   }
-  function wipe() { try { localStorage.removeItem(SAVE_KEY); } catch (e) {} }
 
+  SH.session = session;
   SH.state = {
     createHero, derive, clampVitals, healFull, gainXp, trainStat,
     addConsumable, buy, equipItem, useConsumable, learnJutsu,
     save, load, hasSave, wipe,
+    register, login, logout, currentHero,
   };
 })(window);

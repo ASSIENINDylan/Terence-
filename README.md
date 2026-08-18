@@ -19,6 +19,11 @@ fichier `index.html`.
 Double-cliquez sur **`index.html`** (ou glissez-le dans un navigateur). Aucune
 installation, aucun serveur.
 
+La **première page est un écran de connexion / inscription** (comptes locaux,
+stockés dans le navigateur). À l'inscription, on crée son personnage :
+**nom**, **apparence personnalisable** (peau, tenue, cheveux, bandeau) et
+**village d'appartenance**. Une reconnexion reprend directement la partie.
+
 - **Se déplacer** : `Z Q S D` (ou `W A S D`) / flèches
 - **Courir** : `Maj` (plus rapide, mais consomme plus de chakra)
 - **Entrer dans un village** : `E` (ou `Espace`) quand on est dessus
@@ -37,10 +42,20 @@ montagnes, désert, lacs et **routes** qui relient les villages. On y trouve les
 
 | Village | Kanji | Spécialité | Style |
 |---|---|---|---|
-| **Chikara** | 力 | Taijutsu | Le corps à corps, la Force |
-| **Mahou** | 魔 | Ninjutsu | Les sceaux et les éléments |
-| **Gensou** | 幻 | Genjutsu | L'illusion, briser l'esprit |
+| **Zambakro** | 力 | Taijutsu | Le corps à corps, la Force |
+| **Abidjan** | 魔 | Ninjutsu | Les sceaux et les éléments |
+| **Akradjo** | 幻 | Genjutsu | L'illusion, briser l'esprit |
 | *Yami* | 闇 | *secret* | *le village de l'Ombre, caché* |
+
+## Compte et personnage
+
+- **Connexion / inscription** en première page. Les comptes sont **locaux**
+  (`localStorage`) — le mot de passe n'est que haché, ce n'est pas une sécurité
+  réseau, juste un profil par joueur sur le navigateur.
+- À l'**inscription**, on choisit **nom**, **apparence** et **village**.
+- L'**apparence** (peau, tenue, cheveux, bandeau) se personnalise à la création
+  et se **modifie à tout moment** depuis la fiche du ninja (`C` → *Apparence*).
+  Elle est reflétée sur la carte et en combat.
 
 ## Dynamique de déplacement (le cœur du jeu)
 

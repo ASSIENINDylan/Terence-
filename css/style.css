@@ -61,6 +61,22 @@ input[type=text] {
 }
 input[type=text]:focus { outline: none; border-color: var(--accent-2); }
 
+/* Écran de création */
+.create-box { width: min(780px, 94vw); }
+.create-grid { display: grid; grid-template-columns: minmax(0, 300px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.create-left, .create-right { min-width: 0; }
+@media (max-width: 640px) { .create-grid { grid-template-columns: 1fr; } }
+
+.appearance { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px; max-width: 100%; }
+.app-preview { background: linear-gradient(180deg,#1a2740,#0e1420); border: 1px solid var(--line); border-radius: 10px; flex: 0 0 auto; }
+.app-controls { flex: 1 1 150px; display: grid; gap: 8px; min-width: 0; }
+.app-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--ink-dim); }
+.app-pick { display: flex; align-items: center; gap: 6px; }
+.app-pick button { width: 26px; height: 26px; padding: 0; font-size: 15px; line-height: 1; border-radius: 7px; background: var(--panel); border: 1px solid var(--line); color: var(--ink); cursor: pointer; }
+.app-pick button:hover { border-color: var(--accent-2); }
+.app-swatch { width: 30px; height: 20px; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); display: inline-block; }
+.app-actions { display: flex; gap: 8px; margin-top: 4px; }
+
 .village-choice { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .village-card {
   text-align: left; cursor: pointer; padding: 12px; border-radius: 12px;

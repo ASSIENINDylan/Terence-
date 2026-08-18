@@ -8,35 +8,70 @@
 </head>
 <body>
   <div id="app">
-    <!-- Écran titre / création de personnage -->
-    <section id="title-screen" class="screen">
+    <!-- 1) Écran de connexion / inscription (première page) -->
+    <section id="auth-screen" class="screen">
       <div class="title-box">
         <h1>忍 &nbsp;Shinobi no Yuukan</h1>
-        <p class="subtitle">Deviens le plus grand shinobi du pays de Yuukan.</p>
+        <p class="subtitle">Connecte-toi ou crée un compte pour entrer dans le pays de Yuukan.</p>
 
-        <div id="new-game-panel">
-          <label class="field">
-            <span>Nom du ninja</span>
-            <input id="hero-name" type="text" maxlength="14" placeholder="ex. Kaito" />
-          </label>
-
-          <p class="field-label">Choisis ton village caché</p>
-          <div id="village-choice" class="village-choice"></div>
-
-          <div class="title-actions">
-            <button id="btn-start" class="btn btn-primary">Commencer l'aventure</button>
-            <button id="btn-continue" class="btn">Continuer</button>
-          </div>
-          <p id="title-hint" class="hint"></p>
+        <div class="tabs">
+          <div class="tab active" data-auth-tab="login">Se connecter</div>
+          <div class="tab" data-auth-tab="register">S'inscrire</div>
         </div>
+
+        <label class="field">
+          <span>Identifiant</span>
+          <input id="auth-user" type="text" maxlength="20" autocomplete="username" placeholder="ton identifiant" />
+        </label>
+        <label class="field">
+          <span>Mot de passe</span>
+          <input id="auth-pass" type="password" maxlength="40" autocomplete="current-password" placeholder="ton mot de passe" />
+        </label>
+        <label class="field hidden" id="auth-pass2-field">
+          <span>Confirme le mot de passe</span>
+          <input id="auth-pass2" type="password" maxlength="40" placeholder="répète le mot de passe" />
+        </label>
+
+        <div class="title-actions">
+          <button id="btn-auth" class="btn btn-primary">Se connecter</button>
+        </div>
+        <p id="auth-hint" class="hint"></p>
       </div>
     </section>
 
-    <!-- Écran de jeu (carte) -->
+    <!-- 2) Écran de création de personnage (nom + apparence + village) -->
+    <section id="create-screen" class="screen hidden">
+      <div class="title-box create-box">
+        <h1>Crée ton shinobi</h1>
+        <p class="subtitle">Nom, apparence et village d'appartenance.</p>
+
+        <div class="create-grid">
+          <div class="create-left">
+            <div id="create-appearance"></div>
+          </div>
+          <div class="create-right">
+            <label class="field">
+              <span>Nom du personnage</span>
+              <input id="hero-name" type="text" maxlength="14" placeholder="ex. Kaito" />
+            </label>
+            <p class="field-label">Village d'appartenance</p>
+            <div id="village-choice" class="village-choice"></div>
+          </div>
+        </div>
+
+        <div class="title-actions">
+          <button id="btn-create" class="btn btn-primary">Entrer dans Yuukan</button>
+          <button id="btn-back" class="btn">Se déconnecter</button>
+        </div>
+        <p id="create-hint" class="hint"></p>
+      </div>
+    </section>
+
+    <!-- 3) Écran de jeu (carte) -->
     <section id="game-screen" class="screen hidden">
       <div class="game-layout">
         <div class="viewport-wrap">
-          <canvas id="view" width="832" height="544"></canvas>
+          <canvas id="view" width="864" height="528"></canvas>
           <div id="toast" class="toast hidden"></div>
         </div>
 

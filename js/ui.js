@@ -261,6 +261,7 @@
 
     const modal = openModal(
       '<button class="btn btn-small modal-close" data-close>Fermer ✕</button>' +
+      '<button class="btn btn-small modal-close" data-appearance style="margin-right:8px">Apparence</button>' +
       "<h2>" + esc(p.name) + "</h2>" +
       '<p class="modal-sub">' + v.kanji + " " + v.name + " · " + data.rankForLevel(p.level) + " · niveau " + p.level + "</p>" +
       '<div class="list" style="margin-bottom:14px">' +
@@ -272,6 +273,7 @@
       '<h3 style="margin-top:14px">Jutsus</h3><div class="list">' + jutsuRows + "</div>"
     );
     modal.querySelector("[data-close]").onclick = closeOverlay;
+    modal.querySelector("[data-appearance]").onclick = () => openAppearance(p, world, () => openCharacter(p, world));
     modal.querySelectorAll("[data-use]").forEach((b) => {
       b.onclick = () => {
         const res = SH.state.useConsumable(p, b.dataset.use);
@@ -280,12 +282,69 @@
     });
   }
 
-  // ---------------------------------------------------------------- Combat
-  function heroPalette(p) {
-    const v = data.VILLAGE_BY_ID[p.village];
-    return ["#2b3040", "#20242e", v.color];
+  // Fenêtre d'édition de l'apparence en jeu (depuis la fiche).
+  function openAppearance(p, world, onBack) {
+    const draft = data.normAppearance(p.appearance);
+    const modal = openModal(
+      "<h2>Apparence du ninja</h2>" +
+      '<p class="modal-sub">Personnalise ton shinobi, puis valide.</p>' +
+      '<div id="app-edit"></div>' +
+      '<div class="app-actions"><button class="btn btn-primary" data-ok>Valider</button>' +
+      '<button class="btn" data-cancel>Annuler</button></div>'
+    );
+    appearanceEditor(modal.querySelector("#app-edit"), draft, () => {
+      SH.render.setHeroAppearance(draft); // aperçu en direct sur la carte derrière
+    });
+    modal.querySelector("[data-ok]").onclick = () => {
+      p.appearance = data.normAppearance(draft);
+      SH.render.setHeroAppearance(p.appearance);
+      SH.state.save(p);
+      toast("Apparence mise à jour.");
+      closeOverlay(); if (onBack) onBack();
+    };
+    modal.querySelector("[data-cancel]").onclick = () => {
+      SH.render.setHeroAppearance(p.appearance); // rétablir
+      closeOverlay(); if (onBack) onBack();
+    };
   }
 
+  // ---------------------------------------------------------------- Éditeur d'apparence
+  // Rend un aperçu + des sélecteurs dans `container`. Modifie `appearance` en
+  // place et appelle onChange() après chaque changement. Réutilisé à la création
+  // et depuis la fiche du ninja.
+  function appearanceEditor(container, appearance, onChange) {
+    const keys = data.APPEARANCE_KEYS;
+    container.innerHTML =
+      '<div class="appearance">' +
+      '<canvas class="app-preview" width="108" height="138"></canvas>' +
+      '<div class="app-controls">' +
+      keys.map((k) =>
+        '<div class="app-row" data-key="' + k + '"><span>' + data.APPEARANCE[k].label + "</span>" +
+        '<div class="app-pick"><button data-dir="-1">‹</button>' +
+        '<span class="app-swatch"></span><button data-dir="1">›</button></div></div>'
+      ).join("") + "</div></div>";
+
+    const preview = container.querySelector(".app-preview");
+    function redraw() {
+      SH.render.drawNinjaSprite(preview, appearance, "right");
+      keys.forEach((k) => {
+        container.querySelector('.app-row[data-key="' + k + '"] .app-swatch').style.background =
+          data.APPEARANCE[k].colors[appearance[k]];
+      });
+    }
+    container.querySelectorAll(".app-row").forEach((row) => {
+      const k = row.dataset.key, n = data.APPEARANCE[k].colors.length;
+      row.querySelectorAll("button").forEach((b) => {
+        b.onclick = () => {
+          appearance[k] = (appearance[k] + (+b.dataset.dir) + n) % n;
+          redraw(); if (onChange) onChange();
+        };
+      });
+    });
+    redraw();
+  }
+
+  // ---------------------------------------------------------------- Combat
   function openCombat(p, world, combat, onDone) {
     const modal = openModal(
       '<div class="combat">' +
@@ -304,8 +363,8 @@
 
     const heroCanvas = modal.querySelectorAll(".fighter.hero canvas")[0];
     const foeCanvas = modal.querySelectorAll(".fighter.foe canvas")[0];
-    SH.render.drawFighter(heroCanvas, heroPalette(p), "right");
-    SH.render.drawFighter(foeCanvas, combat.foe.palette, "left");
+    SH.render.drawNinjaSprite(heroCanvas, p.appearance, "right");
+    SH.render.drawMonsterSprite(foeCanvas, combat.foe.palette, "left");
     modal.querySelector("#foe-name").textContent = combat.foe.name + " (niv. " + combat.foe.level + ")";
 
     function renderBars() {
@@ -375,5 +434,5 @@
     renderBars(); renderLog(); renderControls();
   }
 
-  SH.ui = { refreshHUD, toast, openVillage, openCharacter, openCombat, closeOverlay, jutsuPrice };
+  SH.ui = { refreshHUD, toast, openVillage, openCharacter, openCombat, closeOverlay, jutsuPrice, appearanceEditor, openAppearance };
 })(window);

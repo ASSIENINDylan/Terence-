@@ -1,13 +1,13 @@
-/* game.js — contrôleur principal : écran-titre, boucle de jeu, la dynamique de
-   déplacement (grille + coût en chakra + régénération), les rencontres, l'entrée
-   dans les villages et la sauvegarde. Point d'entrée du jeu. Exposé sous SH.game. */
+/* game.js — contrôleur principal : connexion/inscription, création de
+   personnage (nom + apparence + village), boucle de jeu, la dynamique de
+   déplacement (grille + coût en chakra + régénération), les rencontres,
+   l'entrée dans les villages et la sauvegarde. Exposé sous SH.game. */
 (function (global) {
   "use strict";
   const SH = (global.SH = global.SH || {});
   const data = SH.data;
   const $ = (id) => document.getElementById(id);
 
-  const TILE = SH.render.TILE;
   const WALK_MS = 170;   // délai entre deux pas (marche)
   const RUN_MS = 105;    // délai entre deux pas (course)
 
@@ -20,9 +20,51 @@
 
   const NAMES = ["Kaito", "Ren", "Aiko", "Haru", "Sora", "Yuki", "Rin", "Taro", "Mika", "Jin"];
 
-  // -------------------------------------------------------- Écran-titre
-  let selectedVillage = "chikara";
-  function buildTitle() {
+  // ============================================================ Connexion / inscription
+  let authMode = "login";
+  function buildAuth() {
+    document.querySelectorAll("[data-auth-tab]").forEach((t) => {
+      t.classList.toggle("active", t.dataset.authTab === authMode);
+      t.onclick = () => { authMode = t.dataset.authTab; buildAuth(); $("auth-hint").textContent = ""; };
+    });
+    $("auth-pass2-field").classList.toggle("hidden", authMode !== "register");
+    $("btn-auth").textContent = authMode === "register" ? "Créer le compte" : "Se connecter";
+  }
+
+  function submitAuth() {
+    const user = $("auth-user").value, pass = $("auth-pass").value;
+    const hint = $("auth-hint");
+    if (authMode === "register") {
+      if (pass !== $("auth-pass2").value) { hint.textContent = "Les mots de passe ne correspondent pas."; return; }
+      const r = SH.state.register(user, pass);
+      if (!r.ok) { hint.textContent = r.error; return; }
+      goCreate();
+    } else {
+      const r = SH.state.login(user, pass);
+      if (!r.ok) { hint.textContent = r.error; return; }
+      if (r.hero) startGameWith(r.hero);
+      else goCreate();
+    }
+  }
+
+  // ============================================================ Création de personnage
+  let selectedVillage = "zambakro";
+  let createAppearance = data.defaultAppearance();
+
+  function goCreate() {
+    $("auth-screen").classList.add("hidden");
+    $("create-screen").classList.remove("hidden");
+    createAppearance = data.defaultAppearance();
+    selectedVillage = "zambakro";
+    $("hero-name").value = "";
+    $("hero-name").placeholder = "ex. " + NAMES[Math.floor(Math.random() * NAMES.length)];
+    $("create-hint").textContent = "";
+    buildVillageChoice();
+    SH.ui.appearanceEditor($("create-appearance"), createAppearance, null);
+    $("hero-name").focus();
+  }
+
+  function buildVillageChoice() {
     const wrap = $("village-choice");
     wrap.innerHTML = data.VILLAGES.map((v) =>
       '<div class="village-card' + (v.id === selectedVillage ? " selected" : "") + '" data-v="' + v.id +
@@ -32,41 +74,35 @@
       '<div class="vc-spec">' + v.specName + "<br>" + v.blurb + "</div></div>"
     ).join("");
     wrap.querySelectorAll(".village-card").forEach((c) => {
-      c.onclick = () => { selectedVillage = c.dataset.v; buildTitle(); };
+      c.onclick = () => { selectedVillage = c.dataset.v; buildVillageChoice(); };
     });
-
-    $("hero-name").placeholder = "ex. " + NAMES[Math.floor(Math.random() * NAMES.length)];
-    $("btn-continue").disabled = !SH.state.hasSave();
-    $("title-hint").textContent = SH.state.hasSave()
-      ? "Une sauvegarde existe — « Continuer » la reprend."
-      : "Choisis un village puis lance-toi. Ta progression est sauvegardée automatiquement.";
   }
 
-  function startNewGame() {
+  function submitCreate() {
     const name = ($("hero-name").value || "").trim() || NAMES[Math.floor(Math.random() * NAMES.length)];
-    if (SH.state.hasSave()) {
-      if (!confirm("Une sauvegarde existe déjà. Démarrer une nouvelle partie l'effacera. Continuer ?")) return;
-      SH.state.wipe();
-    }
-    player = SH.state.createHero(name, selectedVillage);
+    player = SH.state.createHero(name, selectedVillage, createAppearance);
     world = SH.world.generate(player.seed);
     placeAtHome();
     SH.state.save(player);
-    enterGame();
+    enterGame(true);
   }
 
-  function continueGame() {
-    const p = SH.state.load();
-    if (!p) { SH.ui.toast("Aucune sauvegarde."); return; }
-    player = p;
+  function backToAuth() {
+    SH.state.logout();
+    $("create-screen").classList.add("hidden");
+    $("auth-screen").classList.remove("hidden");
+    $("auth-pass").value = "";
+    buildAuth();
+  }
+
+  // ============================================================ Entrée en jeu
+  function startGameWith(hero) {
+    player = hero;
+    player.appearance = data.normAppearance(player.appearance);
     world = SH.world.generate(player.seed);
-    // Ré-appliquer les découvertes (villages secrets) sur la carte régénérée.
-    for (const v of world.villages) {
-      if (v.hidden && player.discovered[v.id]) v.discovered = true;
-    }
-    // Valider la position.
+    for (const v of world.villages) if (v.hidden && player.discovered && player.discovered[v.id]) v.discovered = true;
     if (!player.pos || !SH.world.inBounds(player.pos.x, player.pos.y)) placeAtHome();
-    enterGame();
+    enterGame(false);
   }
 
   function placeAtHome() {
@@ -74,22 +110,24 @@
     player.pos = { x: home.x, y: home.y };
   }
 
-  function enterGame() {
-    $("title-screen").classList.add("hidden");
+  function enterGame(isNew) {
+    $("auth-screen").classList.add("hidden");
+    $("create-screen").classList.add("hidden");
     $("game-screen").classList.remove("hidden");
     canvas = $("view");
     ctx = canvas.getContext("2d");
-    SH.render.setHeroVillage(player.village);
+    SH.render.setHeroAppearance(player.appearance);
     rx = player.pos.x; ry = player.pos.y;
     SH.state.clampVitals(player);
     SH.ui.refreshHUD(player, world);
     lastTime = performance.now();
     cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(loop);
-    SH.ui.toast("Bienvenue à " + data.VILLAGE_BY_ID[player.village].name + ". Explore le pays de Yuukan.", 4000);
+    SH.ui.toast((isNew ? "Bienvenue à " : "Bon retour à ") + data.VILLAGE_BY_ID[player.village].name +
+      ". Explore le pays de Yuukan.", 4000);
   }
 
-  // -------------------------------------------------------- Déplacement
+  // ============================================================ Déplacement
   function tileAt(x, y) { return world.tiles[SH.world.idx(x, y)]; }
 
   function tryStep(dt) {
@@ -106,9 +144,8 @@
 
     if (!SH.world.inBounds(nx, ny)) return;
     const t = data.TERR_BY_ID[tileAt(nx, ny)];
-    if (!t.walk) { return; } // eau / obstacle
+    if (!t.walk) return; // eau / obstacle
 
-    // Coût en chakra du pas (la course coûte plus cher).
     let cost = t.chakra;
     if (running) cost = Math.ceil(cost * 1.6);
     if (cost > 0 && player.ck < cost) {
@@ -119,7 +156,6 @@
     player.ck -= cost;
     player.pos.x = nx; player.pos.y = ny;
 
-    // Découverte du village secret.
     for (const v of world.villages) {
       if (v.hidden && !v.discovered && Math.abs(v.x - nx) + Math.abs(v.y - ny) <= 3) {
         v.discovered = true; player.discovered[v.id] = true;
@@ -128,7 +164,6 @@
       }
     }
 
-    // Rencontre sauvage.
     if (encImmunity > 0) encImmunity--;
     else maybeEncounter(t, nx, ny);
   }
@@ -145,7 +180,7 @@
     startCombat(foeId, lvl);
   }
 
-  // -------------------------------------------------------- Combat
+  // ============================================================ Combat
   function startCombat(foeId, lvl) {
     inCombat = true;
     keys.length = 0;
@@ -161,13 +196,11 @@
 
   function onCombatEnd(result) {
     inCombat = false;
-    encImmunity = 4; // petite immunité après un combat
+    encImmunity = 4;
     if (result.outcome === "win") {
       player.ryo += result.ryo;
       let msg = "Victoire ! +" + result.xp + " XP, +" + result.ryo + " ₽.";
-      // Butin éventuel.
       if (SH.rng.chance(0.22)) { SH.state.addConsumable(player, "potion_soin", 1); msg += " Butin : Potion de soin."; }
-      // Progression de mission.
       if (player.mission && player.mission.type === "hunt" && player.mission.target === result.foeId) {
         player.missionProgress++;
         if (player.missionProgress >= player.mission.count) {
@@ -197,7 +230,7 @@
     SH.ui.refreshHUD(player, world);
   }
 
-  // -------------------------------------------------------- Interactions
+  // ============================================================ Interactions
   function interact() {
     if (paused || inCombat) return;
     const v = SH.world.villageAt(world, player.pos.x, player.pos.y);
@@ -205,28 +238,22 @@
     else SH.ui.toast("Aucun village ici. Suis les routes pour en rejoindre un.");
   }
 
-  // -------------------------------------------------------- Boucle
+  // ============================================================ Boucle
   function loop(now) {
     const dt = Math.min(0.05, (now - lastTime) / 1000);
     lastTime = now;
 
     if (!paused && !inCombat) {
-      // Déplacement.
-      const before = player.pos.x + "," + player.pos.y;
       tryStep(dt);
       const moving = keys.length > 0;
-
-      // Régénération : rapide à l'arrêt, lente en mouvement.
       const d = SH.state.derive(player);
       const ckRate = moving ? 2.5 : 8;
       player.ck = Math.min(d.chakraMax, player.ck + ckRate * dt);
       if (!moving && player.hp < d.pvMax) player.hp = Math.min(d.pvMax, player.hp + 1.5 * dt);
-
       if (moving) walkPhase += dt * 10;
       SH.ui.refreshHUD(player, world);
     }
 
-    // Interpolation douce vers la tuile courante.
     const ease = Math.min(1, dt * 12);
     rx += (player.pos.x - rx) * ease;
     ry += (player.pos.y - ry) * ease;
@@ -239,7 +266,7 @@
 
   function setPaused(v) { paused = v; if (v) keys.length = 0; }
 
-  // -------------------------------------------------------- Entrées clavier
+  // ============================================================ Entrées clavier
   const keyState = { shift: false };
   const DIRKEYS = {
     ArrowDown: 0, s: 0, S: 0,
@@ -251,7 +278,7 @@
   function onKeyDown(e) {
     if (e.key === "Shift") { keyState.shift = true; return; }
     if (e.repeat) return;
-    if ($("game-screen").classList.contains("hidden")) return;
+    if ($("game-screen").classList.contains("hidden")) return; // pas de déplacement hors jeu
 
     if (e.key === "Escape") { if (!inCombat) SH.ui.closeOverlay(); return; }
     if (paused || inCombat) return;
@@ -277,12 +304,16 @@
     }
   }
 
-  // -------------------------------------------------------- Init
+  // ============================================================ Init
   function init() {
-    buildTitle();
-    $("btn-start").onclick = startNewGame;
-    $("btn-continue").onclick = continueGame;
-    $("hero-name").addEventListener("keydown", (e) => { if (e.key === "Enter") startNewGame(); });
+    buildAuth();
+    $("btn-auth").onclick = submitAuth;
+    $("auth-pass").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
+    $("auth-pass2").addEventListener("keydown", (e) => { if (e.key === "Enter") submitAuth(); });
+
+    $("btn-create").onclick = submitCreate;
+    $("btn-back").onclick = backToAuth;
+    $("hero-name").addEventListener("keydown", (e) => { if (e.key === "Enter") submitCreate(); });
 
     $("btn-menu").onclick = interact;
     $("btn-char").onclick = () => SH.ui.openCharacter(player, world);
@@ -290,7 +321,6 @@
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
-    // Relâcher les touches si la fenêtre perd le focus (évite un déplacement fantôme).
     window.addEventListener("blur", () => { keys.length = 0; keyState.shift = false; });
   }
 
