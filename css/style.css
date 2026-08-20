@@ -105,7 +105,7 @@ input[type=text]:focus { outline: none; border-color: var(--accent-2); }
 #view {
   display: block; border-radius: 12px; border: 1px solid var(--line);
   background: #0a0d12; box-shadow: var(--shadow); image-rendering: auto;
-  max-width: 100%;
+  max-width: 100%; cursor: pointer;
 }
 
 #sidebar {

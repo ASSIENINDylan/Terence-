@@ -8,15 +8,16 @@
   const data = SH.data;
   const $ = (id) => document.getElementById(id);
 
-  const WALK_MS = 170;   // délai entre deux pas (marche)
-  const RUN_MS = 105;    // délai entre deux pas (course)
+  const WALK_MS = 150;   // délai entre deux pas
 
+  const TILE = SH.render.TILE;
   let player = null, world = null, canvas = null, ctx = null;
   let paused = false, inCombat = false;
   let rx = 0, ry = 0, dir = 0, walkPhase = 0;
   let moveTimer = 0, encImmunity = 0;
   let lastTime = 0, rafId = 0;
-  const keys = [];       // pile des directions maintenues (dernière = active)
+  let path = [];             // file des pas restants (déplacement à la souris)
+  let arrivalVillage = null; // village à ouvrir en arrivant dessus
 
   const NAMES = ["Kaito", "Ren", "Aiko", "Haru", "Sora", "Yuki", "Rin", "Taro", "Mika", "Jin"];
 
@@ -118,6 +119,7 @@
     ctx = canvas.getContext("2d");
     SH.render.setHeroAppearance(player.appearance);
     rx = player.pos.x; ry = player.pos.y;
+    stopMoving();
     SH.state.clampVitals(player);
     SH.ui.refreshHUD(player, world);
     lastTime = performance.now();
@@ -127,63 +129,96 @@
       ". Explore le pays de Yuukan.", 4000);
   }
 
-  // ============================================================ Déplacement
+  // ============================================================ Déplacement (souris)
   function tileAt(x, y) { return world.tiles[SH.world.idx(x, y)]; }
+  function dirFromDelta(dx, dy) { return dx > 0 ? 2 : dx < 0 ? 1 : dy < 0 ? 3 : 0; }
 
-  function tryStep(dt) {
-    moveTimer -= dt * 1000;
-    const active = keys[keys.length - 1];
-    if (active == null) return;
-    dir = active;
-    if (moveTimer > 0) return;
+  // Convertit un clic sur le canvas en case, et lance un déplacement vers elle.
+  function canvasClick(e) {
+    if (paused || inCombat || !world) return;
+    const rect = canvas.getBoundingClientRect();
+    const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+    const cam = SH.render.getCam();
+    const px = (e.clientX - rect.left) * sx + cam.x;
+    const py = (e.clientY - rect.top) * sy + cam.y;
+    const tx = Math.floor(px / TILE), ty = Math.floor(py / TILE);
+    if (!SH.world.inBounds(tx, ty)) return;
 
-    const running = keyState.shift;
-    const delta = [[0, 1], [-1, 0], [1, 0], [0, -1]][active]; // 0 bas,1 gauche,2 droite,3 haut
-    const nx = player.pos.x + delta[0], ny = player.pos.y + delta[1];
-    moveTimer = running ? RUN_MS : WALK_MS;
-
-    if (!SH.world.inBounds(nx, ny)) return;
-    const t = data.TERR_BY_ID[tileAt(nx, ny)];
-    if (!t.walk) return; // eau / obstacle
-
-    let cost = t.chakra;
-    if (running) cost = Math.ceil(cost * 1.6);
-    if (cost > 0 && player.ck < cost) {
-      SH.ui.toast("Chakra épuisé — repose-toi (retourne au village ou sur une route).");
-      moveTimer = 260;
+    // Clic sur sa propre case : entrer dans le village s'il y en a un.
+    if (tx === player.pos.x && ty === player.pos.y) {
+      const v = SH.world.villageAt(world, tx, ty);
+      if (v) SH.ui.openVillage(player, world, v);
       return;
     }
-    player.ck -= cost;
-    player.pos.x = nx; player.pos.y = ny;
+    if (!data.TERR_BY_ID[tileAt(tx, ty)].walk) { SH.ui.toast("Zone infranchissable."); return; }
 
+    const p = SH.world.findPath(world, player.pos, { x: tx, y: ty });
+    if (!p || !p.length) { SH.ui.toast("Aucun chemin vers cet endroit."); return; }
+    path = p;
+    arrivalVillage = SH.world.villageAt(world, tx, ty);
+    SH.render.setMoveTarget({ x: tx, y: ty });
+  }
+
+  // Avance d'un pas le long du chemin courant (appelé par la boucle).
+  function followPath(dt) {
+    moveTimer -= dt * 1000;
+    if (!path.length || moveTimer > 0) return;
+
+    const next = path[0];
+    const t = data.TERR_BY_ID[tileAt(next.x, next.y)];
+    if (!t.walk) { stopMoving(); return; }               // terrain devenu bloqué
+    dir = dirFromDelta(next.x - player.pos.x, next.y - player.pos.y);
+
+    const cost = t.chakra;
+    if (cost > 0 && player.ck < cost) {
+      SH.ui.toast("Chakra épuisé — repose-toi (retourne au village ou sur une route).");
+      stopMoving(); moveTimer = 260; return;
+    }
+    player.ck -= cost;
+    player.pos.x = next.x; player.pos.y = next.y;
+    path.shift();
+    moveTimer = WALK_MS;
+
+    // Découverte du village secret.
     for (const v of world.villages) {
-      if (v.hidden && !v.discovered && Math.abs(v.x - nx) + Math.abs(v.y - ny) <= 3) {
+      if (v.hidden && !v.discovered && Math.abs(v.x - next.x) + Math.abs(v.y - next.y) <= 3) {
         v.discovered = true; player.discovered[v.id] = true;
         SH.ui.toast("✦ Tu as découvert le village caché de " + v.name + " !", 4200);
         SH.state.save(player);
       }
     }
 
+    // Rencontre : interrompt le déplacement.
     if (encImmunity > 0) encImmunity--;
-    else maybeEncounter(t, nx, ny);
+    else if (maybeEncounter(t, next.x, next.y)) { stopMoving(); return; }
+
+    // Arrivée à destination.
+    if (!path.length) {
+      SH.render.setMoveTarget(null);
+      if (arrivalVillage) { const v = arrivalVillage; arrivalVillage = null; SH.ui.openVillage(player, world, v); }
+    }
   }
 
+  function stopMoving() { path = []; arrivalVillage = null; SH.render.setMoveTarget(null); }
+
+  // Déclenche un combat le cas échéant ; renvoie true si un combat a démarré.
   function maybeEncounter(terr, x, y) {
-    if (!terr.pool.length || terr.encounter <= 0) return;
-    if (SH.world.villageAt(world, x, y)) return;
-    if (!SH.rng.chance(terr.encounter)) return;
+    if (!terr.pool.length || terr.encounter <= 0) return false;
+    if (SH.world.villageAt(world, x, y)) return false;
+    if (!SH.rng.chance(terr.encounter)) return false;
 
     const foeId = SH.rng.pick(terr.pool);
     let lvl = player.level + SH.rng.int(-1, 1);
     if (terr.id === data.TERR.MONTAGNE.id || terr.id === data.TERR.DESERT.id) lvl += 1;
     lvl = Math.max(1, lvl);
     startCombat(foeId, lvl);
+    return true;
   }
 
   // ============================================================ Combat
   function startCombat(foeId, lvl) {
     inCombat = true;
-    keys.length = 0;
+    stopMoving();
     const c = SH.combat.start(player, foeId, lvl);
     SH.ui.openCombat(player, world, c, onCombatEnd);
   }
@@ -244,8 +279,8 @@
     lastTime = now;
 
     if (!paused && !inCombat) {
-      tryStep(dt);
-      const moving = keys.length > 0;
+      followPath(dt);
+      const moving = path.length > 0;
       const d = SH.state.derive(player);
       const ckRate = moving ? 2.5 : 8;
       player.ck = Math.min(d.chakraMax, player.ck + ckRate * dt);
@@ -260,48 +295,19 @@
     if (Math.abs(player.pos.x - rx) < 0.01) rx = player.pos.x;
     if (Math.abs(player.pos.y - ry) < 0.01) ry = player.pos.y;
 
-    if (ctx) SH.render.drawWorld(ctx, world, rx, ry, dir, keys.length ? walkPhase : 0);
+    if (ctx) SH.render.drawWorld(ctx, world, rx, ry, dir, path.length ? walkPhase : 0);
     rafId = requestAnimationFrame(loop);
   }
 
-  function setPaused(v) { paused = v; if (v) keys.length = 0; }
+  function setPaused(v) { paused = v; if (v) stopMoving(); }
 
-  // ============================================================ Entrées clavier
-  const keyState = { shift: false };
-  const DIRKEYS = {
-    ArrowDown: 0, s: 0, S: 0,
-    ArrowLeft: 1, q: 1, Q: 1, a: 1, A: 1,
-    ArrowRight: 2, d: 2, D: 2,
-    ArrowUp: 3, z: 3, Z: 3, w: 3, W: 3,
-  };
-
+  // ============================================================ Entrées clavier (raccourcis seulement)
   function onKeyDown(e) {
-    if (e.key === "Shift") { keyState.shift = true; return; }
-    if (e.repeat) return;
-    if ($("game-screen").classList.contains("hidden")) return; // pas de déplacement hors jeu
-
+    if ($("game-screen").classList.contains("hidden")) return;
     if (e.key === "Escape") { if (!inCombat) SH.ui.closeOverlay(); return; }
     if (paused || inCombat) return;
-
-    if (e.key in DIRKEYS) {
-      const dv = DIRKEYS[e.key];
-      const i = keys.indexOf(dv);
-      if (i !== -1) keys.splice(i, 1);
-      keys.push(dv);
-      e.preventDefault();
-      return;
-    }
-    if (e.key === "e" || e.key === "E" || e.key === " ") { interact(); e.preventDefault(); }
-    else if (e.key === "c" || e.key === "C") { SH.ui.openCharacter(player, world); }
-  }
-
-  function onKeyUp(e) {
-    if (e.key === "Shift") { keyState.shift = false; return; }
-    if (e.key in DIRKEYS) {
-      const dv = DIRKEYS[e.key];
-      const i = keys.indexOf(dv);
-      if (i !== -1) keys.splice(i, 1);
-    }
+    if (e.key === "e" || e.key === "E") interact();          // ouvrir le village (aussi au clic)
+    else if (e.key === "c" || e.key === "C") SH.ui.openCharacter(player, world);
   }
 
   // ============================================================ Init
@@ -319,11 +325,13 @@
     $("btn-char").onclick = () => SH.ui.openCharacter(player, world);
     $("btn-save").onclick = () => { if (player) { SH.state.save(player); SH.ui.toast("Partie sauvegardée."); } };
 
+    // Déplacement uniquement à la souris : clic sur une case.
+    $("view").addEventListener("click", canvasClick);
+
     window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", () => { keys.length = 0; keyState.shift = false; });
+    window.addEventListener("blur", stopMoving);
   }
 
-  SH.game = { init, setPaused };
+  SH.game = { init, setPaused, _pos: () => (player ? { x: player.pos.x, y: player.pos.y } : null) };
   document.addEventListener("DOMContentLoaded", init);
 })(window);

@@ -112,5 +112,59 @@
     return null;
   }
 
-  SH.world = { W, H, generate, idx, inBounds, villageAt };
+  // Coût de traversée d'une tuile (pondère le chemin : préfère routes/villages).
+  function stepCost(world, x, y) {
+    const t = SH.data.TERR_BY_ID[world.tiles[idx(x, y)]];
+    return t.walk ? Math.max(0.5, t.chakra) : Infinity;
+  }
+
+  // Plus court chemin (Dijkstra 4-directions) de `s` à `g`, pondéré par le coût
+  // de terrain. Renvoie la liste des pas (hors départ, `g` inclus) ou null.
+  function findPath(world, s, g) {
+    if (!inBounds(g.x, g.y) || !SH.data.TERR_BY_ID[world.tiles[idx(g.x, g.y)]].walk) return null;
+    if (s.x === g.x && s.y === g.y) return [];
+    const N = W * H;
+    const dist = new Float64Array(N).fill(Infinity);
+    const prev = new Int32Array(N).fill(-1);
+    const start = idx(s.x, s.y), goal = idx(g.x, g.y);
+    dist[start] = 0;
+    // Tas binaire minimal (index, priorité).
+    const heap = [{ i: start, d: 0 }];
+    const push = (n) => {
+      heap.push(n); let c = heap.length - 1;
+      while (c > 0) { const p = (c - 1) >> 1; if (heap[p].d <= heap[c].d) break; [heap[p], heap[c]] = [heap[c], heap[p]]; c = p; }
+    };
+    const pop = () => {
+      const top = heap[0], last = heap.pop();
+      if (heap.length) { heap[0] = last; let c = 0;
+        for (;;) { let l = 2 * c + 1, r = l + 1, m = c;
+          if (l < heap.length && heap[l].d < heap[m].d) m = l;
+          if (r < heap.length && heap[r].d < heap[m].d) m = r;
+          if (m === c) break; [heap[m], heap[c]] = [heap[c], heap[m]]; c = m; } }
+      return top;
+    };
+    while (heap.length) {
+      const { i, d } = pop();
+      if (i === goal) break;
+      if (d > dist[i]) continue;
+      const x = i % W, y = (i / W) | 0;
+      const nb = [[x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]];
+      for (const [nx, ny] of nb) {
+        if (!inBounds(nx, ny)) continue;
+        const c = stepCost(world, nx, ny);
+        if (c === Infinity) continue;
+        const j = idx(nx, ny), nd = d + c;
+        if (nd < dist[j]) { dist[j] = nd; prev[j] = i; push({ i: j, d: nd }); }
+      }
+    }
+    if (dist[goal] === Infinity) return null;
+    const path = [];
+    for (let cur = goal; cur !== start && cur !== -1; cur = prev[cur]) {
+      path.push({ x: cur % W, y: (cur / W) | 0 });
+    }
+    path.reverse();
+    return path;
+  }
+
+  SH.world = { W, H, generate, idx, inBounds, villageAt, findPath };
 })(window);

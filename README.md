@@ -24,9 +24,10 @@ stockés dans le navigateur). À l'inscription, on crée son personnage :
 **nom**, **apparence personnalisable** (peau, tenue, cheveux, bandeau) et
 **village d'appartenance**. Une reconnexion reprend directement la partie.
 
-- **Se déplacer** : `Z Q S D` (ou `W A S D`) / flèches
-- **Courir** : `Maj` (plus rapide, mais consomme plus de chakra)
-- **Entrer dans un village** : `E` (ou `Espace`) quand on est dessus
+- **Se déplacer** : **clique une case** — le ninja marche jusque-là en suivant
+  automatiquement un chemin (il contourne l'eau et longe les routes).
+- **Entrer dans un village** : **clique le village** (le ninja s'y rend puis
+  le menu s'ouvre), ou touche `E` quand on est dessus.
 - **Fiche du ninja & jutsus** : `C`
 - **Sauvegarder** : bouton *Sauvegarder* (la partie est aussi sauvegardée
   automatiquement après chaque combat, achat, montée de niveau…)
@@ -61,8 +62,10 @@ montagnes, désert, lacs et **routes** qui relient les villages. On y trouve les
 
 ## Dynamique de déplacement (le cœur du jeu)
 
-- Le monde est une **grille de zones**. On avance case par case ; le rendu
-  interpole pour une marche fluide, la caméra suit le ninja.
+- Le monde est une **grille de zones**. On **clique une case** et le ninja s'y
+  rend en suivant le plus court chemin (Dijkstra pondéré par le coût de terrain,
+  qui contourne l'eau et privilégie les routes) ; le rendu interpole pour une
+  marche fluide et la caméra suit le ninja.
 - **Chaque pas coûte du chakra**, selon le terrain : route `1`, plaine `2`,
   forêt `3`, désert `4`, montagne `5`. Les villages sont gratuits.
 - Le **chakra régénère** — vite à l'arrêt, lentement en marchant. À sec, on ne

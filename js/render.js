@@ -93,6 +93,7 @@
     let camY = ry * TILE + TILE / 2 - ch / 2;
     camX = Math.max(0, Math.min(world.w * TILE - cw, camX));
     camY = Math.max(0, Math.min(world.h * TILE - ch, camY));
+    cam.x = camX; cam.y = camY;
 
     const c0 = Math.floor(camX / TILE), r0 = Math.floor(camY / TILE);
     const c1 = Math.min(world.w - 1, c0 + Math.ceil(cw / TILE) + 1);
@@ -114,12 +115,26 @@
       if (px < -TILE || py < -TILE || px > cw || py > ch) continue;
       drawVillage(ctx, v, px, py);
     }
+    // Marqueur de destination (clic).
+    if (moveTarget) {
+      const mx = moveTarget.x * TILE - camX + TILE / 2, my = moveTarget.y * TILE - camY + TILE / 2;
+      const t = (Date.now() % 1000) / 1000;
+      ctx.strokeStyle = "rgba(240,192,74,.85)"; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(mx, my, TILE * 0.30, 0, 7); ctx.stroke();
+      ctx.strokeStyle = "rgba(240,192,74," + (1 - t).toFixed(2) + ")"; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(mx, my, TILE * 0.12 + t * TILE * 0.28, 0, 7); ctx.stroke();
+    }
+
     drawHeroTop(ctx, rx * TILE + TILE / 2 - camX, ry * TILE + TILE / 2 - camY,
       data.appearancePalette(heroAppearance), dir, walkPhase);
   }
 
   let heroAppearance = data.defaultAppearance();
   function setHeroAppearance(a) { heroAppearance = data.normAppearance(a); }
+  const cam = { x: 0, y: 0 };
+  function getCam() { return cam; }
+  let moveTarget = null;
+  function setMoveTarget(t) { moveTarget = t; }
 
   // ============================================================ Portrait de face
   // Demi-largeur du visage selon la forme.
@@ -370,5 +385,5 @@
     ctx.restore();
   }
 
-  SH.render = { TILE, drawWorld, drawPortrait, drawFace, drawNinjaSprite, drawMonsterSprite, setHeroAppearance };
+  SH.render = { TILE, drawWorld, drawPortrait, drawFace, drawNinjaSprite, drawMonsterSprite, setHeroAppearance, getCam, setMoveTarget };
 })(window);
