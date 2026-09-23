@@ -24,7 +24,10 @@
 | Monnaie | **Le Djê** — Décidé |
 | Plateforme | **Jeu PC** — Décidé |
 | Rendu | **Combat** au tour par tour avec des décors à la Darkest Dungeon ; **déplacements sur la carte** façon shinobi.fr — Décidé |
-| Code | **On repart de zéro** (sans réutiliser `game.js` ni `mmorpg/`) — Décidé |
+| Code | **On repart de zéro** (sans réutiliser `game.js` ni `mmorpg/`), dans un **nouveau dépôt** — Décidé |
+| Graphismes | Pas de dessinateur : **style simple et élégant** — Décidé |
+| Rôles | **Terence dirige la conception, Claude développe** — Décidé |
+| Niveau maximum | **100** — Décidé |
 
 ### Ce qu'on garde de shinobi.fr (le cœur du jeu)
 - Des **jutsus complexes**.
@@ -117,7 +120,8 @@ Structure d'une phrase : **Élément → Forme → Effet principal → (Effet se
 - **Niveau maximum : 100.**
 - **1 élément de départ**, donné par la **région** du ninja.
 - **1 élément au choix tous les 20 niveaux** (niveaux 20, 40, 60, 80, 100), soit **6 éléments au total**.
-- **Connaître un jutsu légendaire** permet d'apprendre **un élément de plus**, au choix.
+- **Chaque jutsu légendaire connu** permet d'apprendre **un élément de plus**, au choix.
+- **On ne peut pas acheter le parchemin d'un jutsu dont on ne maîtrise pas l'élément.**
 - Une fusion (élément rare) exige de maîtriser les **deux** éléments qui la composent.
 
 ### Élément de départ par région (Proposé)
@@ -195,6 +199,13 @@ Chaque élément mythique est lié à un **lieu mythique** et à un **mythe**, e
 ### Appartenance (Décidé)
 - **Impossible de changer de village ou de région** une fois le ninja créé.
 
+### Progression (Décidé)
+- On gagne de l'**expérience** en combattant des **PNJ**, des **joueurs**, et en accomplissant des **missions**.
+- **Certaines zones ne sont accessibles qu'à partir de certains niveaux.**
+
+### Défaite hors siège (Décidé)
+- Le ninja **perd tous ses objets** et **renaît dans son village**.
+
 ### Trois attributs (Décidé ; effets Proposés)
 Chaque région a un **avantage dans un attribut** (voir §4).
 
@@ -239,7 +250,7 @@ Les jutsus **influencent** le combat ; les attributs et l'équipement en sont la
 - **Principe :** les six régions s'affrontent toutes entre elles. Il n'y a pas de bloc Nord contre Sud.
 
 ### Le Cœur (Décidé)
-- **Trois villages aux habitants neutres.**
+- **Trois villages aux habitants neutres**, uniquement des **PNJ** : aucun joueur n'y naît.
 - Des **lieux introuvables dans les six autres régions**.
 - Aucun combat entre joueurs.
 
@@ -261,18 +272,24 @@ Le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagu
 - Les villages ne correspondent **pas** à des ethnies réelles, et aucun n'est « le méchant ».
 - On évite de rejouer des conflits réels récents.
 
-## 7. La guerre entre régions (Décidé ; durées Proposées)
+## 7. La guerre entre régions (Décidé)
 
 - **Ce sont les régions qui se font la guerre.** Les trois villages d'une région sont alliés.
-- Chaque région est découpée en **zones** qui donnent des **bonus** à qui les occupe.
+- Chaque région est découpée en **8 zones** qui donnent des **bonus** à qui les occupe.
 
 ### Déroulement d'un assaut
 1. **Chaque vendredi soir**, les **portails** des régions deviennent attaquables.
 2. Chaque portail est gardé par un **PNJ très puissant**. Il faut être bien équipé et bien organisé pour le battre.
-3. Une fois le garde battu, une **annonce** est faite dans la région attaquée, qui dispose d'un **délai pour se préparer** et envoyer ses soldats.
+3. Une fois le garde battu, une **annonce** est faite dans la région attaquée, qui dispose d'**une heure pour se préparer** et envoyer ses soldats.
 4. Les assaillants **choisissent la zone** qu'ils veulent assiéger.
 5. Si l'assaut réussit, la zone passe à la région attaquante, qui **s'agrandit** et récupère les **bonus de la zone**.
 6. **Une seule zone peut être prise par week-end.**
+7. **Au maximum deux régions** peuvent attaquer une même région.
+8. Le siège se joue en **combats d'équipes simultanés**.
+
+### Réinitialisation
+- Une région peut **perdre toutes ses zones**.
+- Dans ce cas, **après deux semaines d'occupation, la carte globale se réinitialise**. Aucune région ne garde trop longtemps les avantages des zones d'une autre.
 
 ## 8. Les trois organisations secrètes (Décidé, noms provisoires)
 
@@ -290,9 +307,7 @@ Le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagu
 
 ## 10. Questions ouvertes
 
-- Déroulement détaillé des sièges (taille des équipes, durée, délai de préparation).
-- Nombre de zones par région ; peut-on reprendre une zone perdue ? Une région peut-elle être réduite à ses seuls villages ?
-- Rôle des joueurs du Cœur.
-- Lignées, mort et blessures.
+- Taille des équipes pendant un siège, et comment on gagne un siège.
+- Défaite : les objets perdus vont-ils au vainqueur ? L'équipement porté est-il inclus ?
+- Lignées.
 - Monétisation.
-- Graphismes : qui dessine ?
