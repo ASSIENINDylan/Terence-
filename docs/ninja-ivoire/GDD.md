@@ -76,7 +76,7 @@ Chaque mudra a un **sens**, et une suite de mudras forme une **phrase**. Une phr
 |---|---|---|
 | **Élément** | 16 | Un mudra par élément de base. Deux mudras d'éléments enchaînés, à très haut niveau, donnent un élément rare. |
 | **Forme** | 10 | projectile, lame, mur, zone, clone, lien, armure, piège, invocation, déplacement |
-| **Effet** | 10 | brûler, lier, soigner, aveugler, repousser, drainer, briser, dissimuler, renforcer, marquer |
+| **Effet** | 10 | consumer (dégâts sur la durée), lier, soigner, aveugler, repousser, drainer, briser, dissimuler, renforcer, marquer |
 | **Modificateur** | 6 | amplifier, étendre, multiplier, retarder, silence, persistance |
 | **Mythique** | 8 | Un par élément mythique, obtenu uniquement par des quêtes |
 
@@ -205,6 +205,11 @@ Chaque élément mythique est lié à un **lieu mythique** et à un **mythe**, e
 
 ### Défaite hors siège (Décidé)
 - Le ninja **perd tous ses objets** et **renaît dans son village**.
+- Les objets perdus vont **au vainqueur**, s'il a de la place dans son inventaire.
+- **Protections :** un **coffre au village** dont le contenu n'est jamais perdu, et une **protection contre les autres joueurs jusqu'au niveau 10**.
+
+### Lignées (Décidé ; détails à définir)
+- Des **lignées héréditaires** donnent des **pouvoirs élémentaires** particuliers.
 
 ### Trois attributs (Décidé ; effets Proposés)
 Chaque région a un **avantage dans un attribut** (voir §4).
@@ -285,7 +290,8 @@ Le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagu
 5. Si l'assaut réussit, la zone passe à la région attaquante, qui **s'agrandit** et récupère les **bonus de la zone**.
 6. **Une seule zone peut être prise par week-end.**
 7. **Au maximum deux régions** peuvent attaquer une même région.
-8. Le siège se joue en **combats d'équipes simultanés**.
+8. Le siège se joue en **combats d'équipes simultanés, en 3 contre 3**.
+9. **On gagne un siège en éliminant tous les adversaires.**
 
 ### Réinitialisation
 - Une région peut **perdre toutes ses zones**.
@@ -307,7 +313,6 @@ Le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagu
 
 ## 10. Questions ouvertes
 
-- Taille des équipes pendant un siège, et comment on gagne un siège.
-- Défaite : les objets perdus vont-ils au vainqueur ? L'équipement porté est-il inclus ?
-- Lignées.
+- Détail des lignées.
+- L'équipement porté est-il perdu à la défaite ?
 - Monétisation.
