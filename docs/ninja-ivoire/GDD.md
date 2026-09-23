@@ -17,8 +17,10 @@
 | Énergie des ninjas | **Le Souffle** (remplace le chakra) — Décidé |
 | Mudras | Restent des **signes de la main** — Décidé |
 | Surnaturel | **Place importante** : esprits, lieux mythiques, forces anciennes — Décidé |
-| Époque | **Monde hybride** : lieux mythiques, villages traditionnels, villes modernes, cités technologiques, mégapoles comme Abidjan aujourd'hui, et villes futuristes — Décidé |
+| Époque | **Monde hybride** : du mythique au futuriste — Décidé |
+| Organisation du monde | **7 régions × 3 villages** (traditionnel, moderne, futuriste) — Décidé |
 | Antagonistes | **Trois organisations secrètes** extérieures aux villages — Décidé |
+| Économie | **Portée par les joueurs**, notamment par la vente des jutsus découverts — Décidé |
 
 ### Ce qu'on garde de shinobi.fr (le cœur du jeu)
 - Des **jutsus complexes**.
@@ -38,100 +40,161 @@
 
 1. **Tour simultané :** les deux camps choisissent leurs actions en secret, puis le tour se résout en même temps. Tout repose sur la lecture de l'adversaire : anticiper, feinter, contrer.
 2. **Mudras :** un jutsu est une suite de signes de la main. Plus la suite est longue, plus le jutsu est puissant, mais plus il prend de tours et plus il peut être **interrompu**.
-3. **Interactions élémentaires :** le vent attise le feu, l'eau éteint le feu, la foudre se propage dans l'eau… Certaines combinaisons entre coéquipiers créent des **jutsus combinés**.
+3. **Interactions élémentaires :** voir la table des forces et faiblesses (§4). Certaines combinaisons entre coéquipiers créent des **jutsus combinés**.
 4. **Positions :** avant, milieu et arrière. La portée des jutsus et les rôles d'équipe en dépendent.
 5. **Loadout :** on emporte un nombre limité de jutsus, d'outils et de parchemins.
 6. **Le Souffle et la fatigue :** une ressource à gérer pendant le combat et d'une mission à l'autre.
 
-## 3. Mudras et jutsus secrets
+## 3. Mudras et jutsus
 
 ### Règles décidées
-- La **grande majorité des jutsus est inconnue** du public. On les découvre en **essayant des combinaisons de mudras**.
-- **Monter de niveau débloque de nouveaux mudras.** Composés avec d'autres mudras précis, ils donnent vie à des jutsus.
-- Il existe donc une **très grande variété de jutsus**.
-- Certains **éléments se combinent** en éléments **plus rares et plus puissants**, mais seulement à partir d'un **niveau très élevé**.
+- **Environ 50 mudras**, combinables entre eux.
+- **L'ordre des signes compte** : les mêmes mudras dans un autre ordre donnent un autre jutsu, ou rien.
+- **Monter de niveau débloque de nouveaux mudras.**
+- **Des milliers de jutsus possibles.** La grande majorité est **inconnue du public** au départ.
+- **Les combinaisons sont fixes** (pas de changement par saison ni par joueur), mais **les jutsus les plus puissants ne sont pas évidents à trouver**.
+- **Un jutsu découvert reste dans la mémoire du ninja**, pour toujours.
+- **Le premier découvreur peut vendre son jutsu** dans le jeu, après l'avoir fait **valider par l'académie de sa région**.
+- **La grammaire des mudras** (ci-dessous) est validée.
 
-### Mécanique proposée : la « grammaire des mudras » (Proposé)
-Chaque mudra a un **sens**, et une suite de mudras forme une **phrase** :
+### La grammaire des mudras (Décidé)
+Chaque mudra a un **sens**, et une suite de mudras forme une **phrase**. Une phrase cohérente donne un jutsu. Certaines phrases précises cachent des **jutsus légendaires** faits à la main.
 
-| Type de mudra | Rôle | Exemples |
+### Répartition des 50 mudras (Proposé)
+
+| Catégorie | Nombre | Rôle |
 |---|---|---|
-| **Élément** | Quel élément le Souffle prend | Feu, Eau, Vent… |
-| **Forme** | Ce que devient le Souffle | projectile, mur, lame, zone, clone, invocation |
-| **Effet** | Ce que ça fait | brûler, lier, soigner, aveugler, repousser |
-| **Modificateur** | Comment ça le fait | plus loin, plus fort, retardé, multiple, silencieux |
+| **Élément** | 16 | Un mudra par élément de base. Deux mudras d'éléments enchaînés, à très haut niveau, donnent un élément rare. |
+| **Forme** | 10 | projectile, lame, mur, zone, clone, lien, armure, piège, invocation, déplacement |
+| **Effet** | 10 | brûler, lier, soigner, aveugler, repousser, drainer, briser, dissimuler, renforcer, marquer |
+| **Modificateur** | 6 | amplifier, étendre, multiplier, retarder, silence, persistance |
+| **Mythique** | 8 | Un par élément mythique, obtenu uniquement par des quêtes |
 
-- Une phrase **cohérente** produit un jutsu **généré par le système**. Il y en a des milliers de possibles, chacun avec un nom et des effets calculés.
-- Certaines phrases précises cachent des **jutsus légendaires** faits à la main, uniques, avec des effets spéciaux.
-- **Indices :** un essai raté n'est pas perdu. Le Souffle « résonne » plus ou moins, ce qui indique qu'on s'approche d'une combinaison. La recherche demande de réfléchir, pas de tout essayer au hasard.
-- **Risque :** un essai raté coûte du Souffle, et un essai très raté peut se retourner contre le lanceur (« retour de Souffle »).
-- **Découvreur :** le premier joueur qui découvre un jutsu légendaire voit son nom inscrit dans les **Chroniques** du serveur.
-- **Économie du savoir :** un jutsu découvert peut être gardé secret, enseigné, vendu, ou réservé à son village. C'est un moteur du pilier Communauté.
-- **Noms des mudras :** inspirés de la faune et des symboles ivoiriens (éléphant, panthère, crocodile, caméléon, calao, araignée Ananzè, tortue, python, hippopotame…).
+Les noms des mudras s'inspirent de la faune et des contes ivoiriens (éléphant, panthère, crocodile, caméléon, calao, araignée Ananzè, tortue, python, hippopotame…).
 
-## 4. Éléments (Proposé)
+### Découverte (Proposé)
+- **Résonance :** un essai raté indique, par l'intensité du Souffle, si l'on s'approche d'une combinaison valide.
+- **Risque :** un essai raté coûte du Souffle. Un essai très raté peut se retourner contre le lanceur.
+- **Chroniques :** le nom du premier découvreur d'un jutsu légendaire est inscrit dans l'histoire du serveur.
+- **Conditions cachées :** les jutsus les plus puissants demandent plus que la bonne suite de signes, par exemple un niveau minimum, la maîtrise d'un élément, un lieu, une heure, une phase de lune. Une suite divulguée sur internet ne suffit donc pas à les lancer.
+- **Maîtrise :** chaque jutsu connu a un niveau de maîtrise qui progresse à l'usage (puissance, coût en Souffle, vitesse de lancement).
 
-### Éléments de base (8)
-Feu · Eau · Vent · Terre · Foudre · **Végétal** · **Métal** · **Son**
+### Validation et vente à l'académie (Proposé)
+1. Le découvreur présente son jutsu à l'**académie de sa région**, qui le teste et l'enregistre à son nom.
+2. Il fixe un prix et vend des **parchemins d'enseignement**. Chaque parchemin apprend le jutsu à l'acheteur, avec un bonus de maîtrise de départ.
+3. L'académie prélève une **taxe**, qui finance la région.
+4. Le jutsu apparaît dans le **catalogue** de l'académie (nom et effets visibles, suite de mudras cachée).
 
-Le Son rappelle les tambours parleurs. Le Métal est l'élément des villes technologiques.
+## 4. Éléments
 
-### Éléments rares (fusions, niveau très élevé)
+### 16 éléments de base (Proposé)
 
-| Fusion | Élément rare |
+Chaque élément est **fort contre deux éléments** et **faible contre deux autres**. Chacun a un horizon d'utilité : **court terme** (effet immédiat), **moyen terme** (contrôle sur plusieurs tours), **long terme** (effet qui grandit avec le temps, en combat ou hors combat).
+
+| Élément | Rôle principal | Horizon | Fort contre | Faible contre |
+|---|---|---|---|---|
+| **Feu** | Gros dégâts, brûlure | Court | Végétal, Essaim | Eau, Sable |
+| **Eau** | Polyvalence, soins, changement de forme | Moyen | Feu, Sable | Terre, Foudre |
+| **Vent** | Vitesse, initiative, portée, dévie les projectiles | Court | Brume, Essaim | Venin, Gravité |
+| **Terre** | Murs, armure, fortifications de territoire | Long | Foudre, Eau | Végétal, Métal |
+| **Foudre** | Perce les défenses, paralysie, agit en premier | Court | Eau, Métal | Terre, Sable |
+| **Végétal** | Pièges, entraves, croissance à chaque tour, récoltes | Long | Terre, Sable | Feu, Métal |
+| **Métal** | Armes, armures, forge et artisanat | Moyen / long | Végétal, Terre | Foudre, Son |
+| **Son** | Interrompt les mudras adverses, détection, tambours qui renforcent l'équipe | Moyen | Métal, Lune | Brume, Venin |
+| **Sable** | Aveuglement, érosion des défenses, pièges | Moyen | Feu, Foudre | Eau, Végétal |
+| **Venin** | Dégâts sur la durée, cumulatifs, affaiblissement | Long | Son, Vent | Sel, Soleil |
+| **Brume** | Cache ses actions à l'adversaire, esquive, infiltration et espionnage | Moyen | Son, Sel | Vent, Soleil |
+| **Sel** | Purification : annule les effets, soigne les altérations, repousse les esprits, conserve les ressources | Moyen / long | Venin, Lune | Brume, Gravité |
+| **Essaim** | Nuées d'insectes, éclaireurs sur la carte, harcèlement qui grossit | Long | Soleil, Gravité | Feu, Vent |
+| **Soleil** | Puissance selon l'heure réelle (max à midi), aveuglement, recharge le Souffle des alliés | Cyclique | Brume, Venin | Lune, Essaim |
+| **Lune** | Illusions, sommeil, puissance la nuit et selon les phases lunaires | Cyclique | Soleil, Gravité | Son, Sel |
+| **Gravité** | Déplace les ennemis entre les rangs, ralentit, écrase | Court / moyen | Vent, Sel | Lune, Essaim |
+
+### 16 éléments rares, par fusion à très haut niveau (Proposé)
+
+| Fusion | Élément rare | Idée |
+|---|---|---|
+| Feu + Terre | **Lave** | Dégâts et terrain brûlant durable |
+| Eau + Vent | **Glace** | Gel, entrave, armure de glace |
+| Feu + Eau | **Vapeur** | Brûlure et dissimulation |
+| Foudre + Métal | **Magnétisme** | Désarme, attire et repousse le métal, neutralise la technologie |
+| Vent + Foudre | **Tempête** | Dégâts de zone sur tout le terrain |
+| Sel + Soleil | **Cristal** | Renvoie les jutsus, stocke du Souffle |
+| Venin + Eau | **Acide** | Détruit armures et équipements |
+| Végétal + Soleil | **Bois sacré** | Soins massifs, croissance explosive |
+| Son + Vent | **Onde de choc** | Repousse et étourdit tout un rang |
+| Feu + Vent | **Cendre** | Aveugle et étouffe sur la durée |
+| Soleil + Lune | **Crépuscule** | Change le cycle jour/nuit du combat |
+| Brume + Lune | **Songe** | Illusions profondes, contrôle de l'esprit |
+| Essaim + Venin | **Fléau** | Épidémie qui se propage d'un ennemi à l'autre |
+| Terre + Gravité | **Séisme** | Brise les positions et les fortifications |
+| Eau + Lune | **Marée** | Vagues qui montent de tour en tour |
+| Sable + Vent | **Harmattan** | Tempête de poussière qui affaiblit tout le camp adverse |
+
+### 8 éléments mythiques, par quêtes surnaturelles (Proposé)
+
+| Élément | Idée |
 |---|---|
-| Feu + Terre | Lave |
-| Eau + Vent | Glace |
-| Feu + Eau | Vapeur |
-| Foudre + Métal | Magnétisme |
-| Eau + Terre | Marais |
-| Vent + Son | Écho (ondes de choc) |
-| Végétal + Terre | Bois sacré |
-| Feu + Vent | Tempête de cendres |
+| **Ivoire** | L'élément légendaire qui donne son nom au jeu : le Souffle originel, blanc et pur |
+| **Esprit** | Lien avec les ancêtres et les génies |
+| **Lumière** | Révélation, guérison, jugement |
+| **Ombre** | Absorption, disparition, peur |
+| **Vie** | Régénération, résurrection |
+| **Temps** | Accélérer, ralentir, rejouer un tour |
+| **Vide** | Effacer un jutsu, annuler un élément |
+| **Astre** | Puissance cosmique, liée aux étoiles et aux éclipses |
 
-### Éléments mythiques (fin de jeu, surnaturel)
-Lumière, Ombre, Esprit (le lien avec les ancêtres et les génies). On les obtient par des quêtes et des lieux mythiques, pas par une simple fusion.
+Chaque élément mythique est lié à un **lieu mythique** et à un **mythe**, et s'obtient par une longue quête.
 
 ## 5. Le monde : la Côte d'Ivoire
 
-### Découpage de la carte
-- La vraie géographie : la côte et les lagunes au sud, la forêt au sud-ouest, les montagnes à l'ouest, la savane au nord, les quatre grands fleuves (Cavally, Sassandra, Bandama, Comoé).
-- **Territoires à conquérir :** les **31 régions** du pays, plus les 2 districts autonomes (Abidjan, Yamoussoukro).
-- Les fleuves servent de frontières naturelles et de points stratégiques.
+### 7 régions (Décidé : 6 en guerre et 1 centrale sûre ; découpage Proposé)
 
-### Villages jouables (Proposé, noms inventés à trouver)
+| Région (nom provisoire) | Géographie réelle | Paysage |
+|---|---|---|
+| **Lagunes** | Sud-Est : Abidjan, Grand-Bassam, Assinie, Aboisso | Littoral, lagunes, mangroves |
+| **Côte Ouest** | Sud-Ouest : San-Pédro, Sassandra, Soubré, forêt de Taï | Forêt primaire, côte sauvage, port |
+| **Montagnes** | Ouest : Man, Danané, Touba, mont Nimba | Montagnes, cascades, forêts d'altitude |
+| **Hautes Savanes** | Nord-Ouest : Odienné, Séguéla, Mankono | Savane arborée, plateaux |
+| **Savanes du Nord** | Nord : Korhogo, Ferkessédougou, Boundiali, Kong | Savane, collines, cités anciennes |
+| **Levant** | Est : Bondoukou, Bouna, Abengourou, parc de la Comoé | Forêt et savane, grande réserve sauvage |
+| **Cœur** (zone sûre) | Centre : Yamoussoukro, Bouaké, lac de Kossou | Terre neutre, lacs, fleuve Bandama |
 
-| Région d'ancrage | Élément de prédilection | Niveau technologique | Identité |
-|---|---|---|---|
-| Sud-Est : lagunes, littoral | Eau | **Mégapole futuriste** | Commerce, ports, finances, gadgets |
-| Sud-Ouest : forêt de Taï | Végétal / Terre | **Traditionnel et mythique** | Pisteurs, plantes, pacte avec les esprits |
-| Ouest : Man, mont Nimba | Foudre | **Traditionnel** | Masques, échassiers, acrobates, cascades |
-| Nord : savane | Feu | **Moderne** | Initiés, chasseurs, feux de brousse |
-| Est : cités anciennes | Vent / Son | **Technologie avancée** | Lettrés, archives, diplomatie, harmattan |
+- **Les six régions périphériques** se font la guerre.
+- **Le Cœur** est une zone sûre : pas de combat entre joueurs, grand marché, arène des examens, conseil entre régions.
+- **Principe :** les six régions s'affrontent toutes entre elles. Il n'y a pas de bloc Nord contre Sud.
 
-### Villes et lieux neutres (Proposé)
-- **Une mégapole neutre** au niveau d'Abidjan aujourd'hui : cœur commercial où tout le monde se croise.
-- **Une cité futuriste** : laboratoires, cybernétique, frontière entre Souffle et machine.
-- **Le Centre (Yamoussoukro, lac de Kossou) :** conseil entre villages, arène des examens.
-- **Lieux mythiques :** le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagunes, le parc de la Comoé.
+### 3 villages par région (Décidé : 21 villages ; avantages Proposés)
+
+Chaque région a un village **traditionnel**, un **moderne** et un **futuriste**. Aucune région n'est donc plus développée qu'une autre.
+
+| Type | Avantages | Inconvénients |
+|---|---|---|
+| **Traditionnel** | Souffle plus puissant, accès privilégié aux lieux mythiques et aux esprits, bonus de découverte des jutsus, soins par les plantes | Peu d'équipement, économie et déplacements plus lents |
+| **Moderne** | Équilibre, commerce, infrastructures, formation plus rapide, bonus de production | Pas d'excellence dans un domaine précis |
+| **Futuriste** | Gadgets, implants, drones, renseignement sur la carte, production rapide | Souffle affaibli par la technologie, vulnérable à la Foudre et au Magnétisme, entretien coûteux, peu d'accès au surnaturel |
+
+### Lieux mythiques (Proposé)
+Le cœur de la forêt de Taï, le sommet du mont Nimba, les profondeurs des lagunes, le parc de la Comoé, les cascades de Man, le lac de Kossou…
 
 ### Principes de respect culturel
 - On s'**inspire** des cultures (masques, sociétés d'initiation, tissus, royaumes, contes) sans les caricaturer, en **fictionnalisant** les objets sacrés.
 - Les villages ne correspondent **pas** à des ethnies réelles, et aucun n'est « le méchant ».
-- On évite de rejouer des conflits réels récents (par exemple une guerre Nord contre Sud).
+- On évite de rejouer des conflits réels récents.
 
-## 6. Les trois organisations secrètes (Proposé)
+## 6. Les trois organisations secrètes (Décidé, noms provisoires)
 
-| Organisation (nom provisoire) | Philosophie | Ce qu'elle veut | Style |
+| Organisation | Philosophie | Ce qu'elle veut | Style |
 |---|---|---|---|
 | **Le Cercle d'Acier** | La technologie doit remplacer le Souffle | Contrôler les villes futuristes et créer des ninjas cybernétiques | Implants, drones, Métal et Foudre |
 | **Les Sans-Visage** | Libérer les forces anciennes | Réveiller des esprits scellés et maîtriser les éléments mythiques | Rituels, possession, Ombre |
-| **La Main d'Or** | Tout s'achète | Contrôler les richesses (or, cacao, ports) et manipuler les villages entre eux | Espions, assassins, corruption |
+| **La Main d'Or** | Tout s'achète | Contrôler les richesses (or, cacao, ports) et manipuler les régions entre elles | Espions, assassins, corruption |
 
 ## 7. Questions ouvertes
 
 - Format et plateforme (navigateur, mobile, PC), rythme de jeu.
 - Réutilisation du serveur Go existant (`mmorpg/`).
-- Personnage : lignées, statistiques, spécialisations, mort.
-- Politique des villages, guerres, saisons.
+- Affinités élémentaires du personnage, lignées, statistiques, mort.
+- Déroulement des guerres entre régions, saisons.
+- Monnaie et économie générale.
 - Monétisation.
