@@ -1,5 +1,8 @@
 # Ninja Ivoire — Document de conception (GDD)
 
+> **Ce document a déménagé.** La version de référence vit désormais dans le dépôt
+> [`ASSIENINDylan/ninja-ivoire`](https://github.com/ASSIENINDylan/ninja-ivoire) (`docs/GDD.md`).
+
 > Document vivant, construit au fil des séances de questions/réponses.
 > **Décidé** = validé par Terence. **Proposé** = piste de Claude, à valider.
 
